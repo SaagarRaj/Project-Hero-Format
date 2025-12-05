@@ -158,3 +158,47 @@ Then upload the generated files from the `samples/` directory via the UI or curl
   Dockerfile
 docker-compose.yml
 ```
+
+---
+
+## How this app works (end-to-end)
+- Uploads: frontend collects `mapping.xlsx` (required), optional `template.xlsx`, and one or more data files (CSV/XLS/XLSX).
+- Mapping parse: backend accepts either the simple `source_col/output_col/default` schema or the migration-style sheet that lists `Column Name in Spreadhseet Payload` plus `Possible Variations` and optional report names.
+- Header cleaning: each input file is read with no header, the backend auto-detects the real header row using mapping tokens and column-like heuristics, and drops empty rows/columns.
+- Column mapping: columns are matched case-insensitively against the synonym list built from mapping (including variations). Missing columns fall back to the provided default.
+- Merge: all mapped DataFrames are outer-merged (merge key prefers `Space`; otherwise first template or first column), combining duplicates.
+- Template/order: if a template is supplied, missing template columns are added as blanks and order is enforced; extra columns are appended.
+- Type normalization: numeric/date/bool/id/string columns are lightly coerced for consistent output; dates are normalized to `YYYY-MM-DD`.
+- Output: a single `final_output.xlsx` is streamed back to the browser.
+
+### Flow chart (high level)
+```
+User uploads files
+       |
+       v
+Frontend builds FormData --> POST /process
+       |
+       v
+Backend parses mapping & optional template
+       |
+       v
+For each input file:
+  - Read (CSV/XLS/XLSX) with header detection
+  - Clean rows/columns
+  - Map columns using synonyms/defaults
+       |
+       v
+Merge all mapped frames on merge key (prefer "Space")
+       |
+       v
+Apply template ordering + type normalization
+       |
+       v
+Write temp Excel & respond as download
+```
+
+### Architecture at a glance
+- **Frontend (Next.js)**: `frontend/app/page.jsx` UI for file selection and submission; environment var `NEXT_PUBLIC_BACKEND_URL` points to FastAPI.
+- **Backend (FastAPI)**: single `/process` endpoint in `backend/main.py` handling mapping/template parsing, header detection, column mapping, merging, ordering, and Excel export.
+- **Data helpers**: header detection, synonym-based matching, merge-key detection, and light type coercion live alongside the endpoint in `backend/main.py`.
+- **Containerization**: `docker-compose.yml` runs both services; each service has its own Dockerfile.
