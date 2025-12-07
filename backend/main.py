@@ -41,10 +41,8 @@ def _unique_preserve_order(values: List[str]) -> List[str]:
 
 def parse_mapping(upload: UploadFile) -> List[dict]:
     """
-    Read the mapping file into a normalized schema compatible with two formats:
-    1) Legacy: columns source_col, output_col, default
-    2) Migration context: Column Name in Spreadhseet Payload, Possible Variations,
-       Central Maui Self Storage - Column Name, Central Maui Self Storage - Report Name (optional)
+    Read the mapping file into a normalized schema using the strict legacy format:
+    columns: source_col, output_col, default
     """
     try:
         mapping_df = pd.read_excel(upload.file, engine="openpyxl")
@@ -53,79 +51,28 @@ def parse_mapping(upload: UploadFile) -> List[dict]:
 
     columns_lower = {col.strip().lower() for col in mapping_df.columns}
 
-    # Legacy mapping support
-    if {"source_col", "output_col", "default"}.issubset(columns_lower):
-        source_col = _find_column(mapping_df, "source_col")
-        output_col = _find_column(mapping_df, "output_col")
-        default_col = _find_column(mapping_df, "default")
-        mapping_schema = []
-        for _, row in mapping_df.iterrows():
-            sources_raw = str(row[source_col]) if pd.notna(row[source_col]) else ""
-            sources = [col.strip() for col in sources_raw.split(",") if col.strip()]
-            if not sources:
-                raise HTTPException(status_code=400, detail="Each mapping row needs at least one source_col")
-            mapping_schema.append(
-                {
-                    "sources": sources,
-                    "output": str(row[output_col]).strip(),
-                    "default": "" if pd.isna(row[default_col]) else row[default_col],
-                    "report": None,
-                }
-            )
-        return mapping_schema
-
-    # Migration mapping format (variations + optional report names)
-    output_col_name = _find_column(mapping_df, "Column Name in Spreadhseet Payload")
-    variations_col = _find_column(mapping_df, "Possible Variations")
-    source_col_name = _find_column(mapping_df, "Central Maui Self Storage - Column Name")
-    report_col_name = _find_column(mapping_df, "Central Maui Self Storage - Report Name")
-    default_col = _find_column(mapping_df, "default")
-
-    if not output_col_name or not variations_col:
+    if not {"source_col", "output_col", "default"}.issubset(columns_lower):
         raise HTTPException(
             status_code=400,
-            detail="Mapping file missing required columns. Expected either (source_col, output_col, default) "
-            "or (Column Name in Spreadhseet Payload, Possible Variations).",
+            detail="Mapping file missing required columns: source_col, output_col, default",
         )
+
+    source_col = _find_column(mapping_df, "source_col")
+    output_col = _find_column(mapping_df, "output_col")
+    default_col = _find_column(mapping_df, "default")
 
     mapping_schema = []
     for _, row in mapping_df.iterrows():
-        output = str(row[output_col_name]).strip() if pd.notna(row[output_col_name]) else ""
-        if not output:
-            continue
-
-        sources: List[str] = []
-        sources.append(output)
-
-        if source_col_name and pd.notna(row.get(source_col_name, None)):
-            candidate = str(row[source_col_name]).strip()
-            if candidate:
-                sources.append(candidate)
-
-        variations_raw = str(row[variations_col]) if pd.notna(row[variations_col]) else ""
-        if variations_raw:
-            variations = (
-                v.strip()
-                for v in variations_raw.replace(";", ",").split(",")
-                if v is not None
-            )
-            sources.extend([v for v in variations if v])
-
-        default_value = ""
-        if default_col and pd.notna(row.get(default_col, None)):
-            default_value = row[default_col]
-
-        report_name = None
-        if report_col_name and pd.notna(row.get(report_col_name, None)):
-            report_candidate = str(row[report_col_name]).strip()
-            report_name = report_candidate if report_candidate else None
-
+        sources_raw = str(row[source_col]) if pd.notna(row[source_col]) else ""
+        sources = [col.strip() for col in sources_raw.split(",") if col.strip()]
+        if not sources:
+            raise HTTPException(status_code=400, detail="Each mapping row needs at least one source_col")
         mapping_schema.append(
             {
-                "sources": _unique_preserve_order([s for s in sources if s]),
-                "output": output,
-                "default": default_value,
-                "report": report_name,
+                "sources": _unique_preserve_order(sources),
+                "output": str(row[output_col]).strip(),
+                "default": "" if pd.isna(row[default_col]) else row[default_col],
+                "report": None,
             }
         )
 
@@ -564,12 +511,30 @@ def coerce_column_types(df: pd.DataFrame) -> pd.DataFrame:
     id_keywords = ["id", "number", "code", "#", "serial", "policy", "lease"]
 
     df_processed = df.copy()
+
+    def clean_currency_or_keep(value):
+        """Convert obvious currency/numeric values to float; otherwise return the original."""
+        if pd.isna(value) or (isinstance(value, str) and value.strip() == ""):
+            return ""
+        try:
+            cleaned = (
+                str(value)
+                .replace("$", "")
+                .replace(",", "")
+                .replace("(", "-")
+                .replace(")", "")
+                .strip()
+            )
+            # If this fails, fall through to return original
+            return float(cleaned)
+        except Exception:
+            return value
     for col in df_processed.columns:
         col_lower = col.lower()
         series = df_processed[col]
 
         if any(keyword in col_lower for keyword in numeric_keywords):
-            df_processed[col] = series.apply(clean_currency).fillna(0)
+            df_processed[col] = series.apply(clean_currency_or_keep)
             continue
 
         if any(keyword in col_lower for keyword in date_keywords):
