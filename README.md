@@ -94,7 +94,7 @@ curl -X POST http://localhost:8000/process \
 ---
 
 ## Dummy data generator (Python)
-Use this script to create sample mapping/template/data files for quick testing.
+Use this script to create sample files that match the **strict mapping format**.
 
 `scripts/generate_dummy_files.py`
 ```python
@@ -105,30 +105,34 @@ def main(out_dir="samples"):
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
 
+    # Mapping format: output_col, report_name, column_name, possible_variations
+    # report_name must match the uploaded filename (normalized: lowercase, no extension).
     mapping = pd.DataFrame([
-        {"source_col": "id,id_number", "output_col": "id", "default": ""},
-        {"source_col": "full_name,name", "output_col": "name", "default": "N/A"},
-        {"source_col": "age", "output_col": "age", "default": ""},
-        {"source_col": "city", "output_col": "city", "default": "Unknown"},
+        {"output_col": "id",    "report_name": "people",   "column_name": "id",            "possible_variations": "identifier"},
+        {"output_col": "name",  "report_name": "people",   "column_name": "name",          "possible_variations": "full name"},
+        {"output_col": "email", "report_name": "contacts", "column_name": "email",         "possible_variations": "e-mail"},
+        {"output_col": "phone", "report_name": "contacts", "column_name": "phone number",  "possible_variations": "phn_no,phone"},
     ])
     mapping.to_excel(out / "mapping.xlsx", index=False)
 
-    template = pd.DataFrame({"output_col": ["id", "name", "age", "city"]})
+    # Optional template controls column order in the output
+    template = pd.DataFrame({"output_col": ["id", "name", "email", "phone"]})
     template.to_excel(out / "template.xlsx", index=False)
 
-    file1 = pd.DataFrame({
-        "id_number": [1, 2],
-        "full_name": ["Alice", "Bob"],
-        "age": [23, None],
+    # Data files. Filenames (without extensions) should match report_name above.
+    people = pd.DataFrame({
+        "id": [1, 2, 3],
+        "name": ["Alice", "Bob", "Carol"],
+        "identifier": [1, 2, 3],  # variation of id
     })
-    file1.to_excel(out / "data1.xlsx", index=False)
+    people.to_excel(out / "people.xlsx", index=False)
 
-    file2 = pd.DataFrame({
-        "id": [3],
-        "name": ["Carol"],
-        "city": ["LA"],
+    contacts = pd.DataFrame({
+        "id": [1, 3],
+        "email": ["alice@example.com", "carol@example.com"],
+        "phn_no": ["111-222-3333", "333-444-5555"],  # variation of phone number
     })
-    file2.to_csv(out / "data2.csv", index=False)
+    contacts.to_csv(out / "contacts.csv", index=False)
 
     print(f"Dummy files written to {out.resolve()}")
 
@@ -140,7 +144,7 @@ Run:
 ```bash
 python scripts/generate_dummy_files.py
 ```
-Then upload the generated files from the `samples/` directory via the UI or curl example.
+Then upload `mapping.xlsx`, optional `template.xlsx`, and the generated `people.xlsx` and `contacts.csv` from the `samples/` directory.
 
 ---
 
@@ -163,7 +167,7 @@ docker-compose.yml
 
 ## How this app works (end-to-end)
 - Uploads: frontend collects `mapping.xlsx` (required), optional `template.xlsx`, and one or more data files (CSV/XLS/XLSX).
-- Mapping parse: backend reads the strict mapping format (`output_col`, `report_name`, `column_name`, `possible_variations`). Variations are treated as synonyms for fuzzy column resolution.
+- Mapping parse: backend reads the strict mapping format (`output_col`, `report_name`, `column_name`, `possible_variations`). `report_name` must match the uploaded filename (normalized: lowercase, no extension). Variations are treated as synonyms for fuzzy column resolution.
 - Header cleaning: each input file is read without assuming a header. We auto-detect the true header row using heuristics and mapping tokens, then drop metadata and empty rows/cols.
 - Column resolution: per mapping row, we pick the best matching source column (exact, normalized, variation, fuzzy contains).
 - Row resolution: we detect a join key across reports (e.g., `id`, `email`, `space`) and use it to assemble the correct entity row from each report. If no key is found, we fall back to row-position alignment.
@@ -238,7 +242,7 @@ Backend /process
 ## Mapping logic (strict)
 - Columns required in `mapping.xlsx`:
   - `output_col`: target column name in the final output
-  - `report_name`: exact file name you expect the value to come from
+  - `report_name`: exact file name you expect the value to come from (normalized: lowercase, no extension)
   - `column_name`: primary column name to match in that report
   - `possible_variations`: comma/semicolon-separated synonyms for fuzzy matching
 - Report matching: we normalize the uploaded filename (lowercase, trimmed, drop extension) and match against `report_name` normalized the same way.
