@@ -2,10 +2,11 @@ from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 import pandas as pd
+import numpy as np
 import tempfile
 import os
 import re
-from typing import Dict, List, Optional
+from typing import Dict, Iterable, List, Optional, Tuple
 from starlette.background import BackgroundTask
 
 app = FastAPI(title="Mapping Normalization API")
@@ -20,66 +21,63 @@ app.add_middleware(
 )
 
 
-def _find_column(mapping_df: pd.DataFrame, expected_name: str) -> Optional[str]:
-    """Case-insensitive helper to locate a column by expected name."""
-    expected = expected_name.strip().lower()
-    for col in mapping_df.columns:
-        if col.strip().lower() == expected:
-            return col
-    return None
+
+def normalize_report_name(name: str) -> str:
+    """Normalize report/file names for matching."""
+    return re.sub(r"\s+", " ", os.path.splitext(str(name).strip().lower())[0])
 
 
-def _unique_preserve_order(values: List[str]) -> List[str]:
-    seen = set()
-    result = []
-    for val in values:
-        if val not in seen:
-            seen.add(val)
-            result.append(val)
-    return result
+def normalize_column_name(name: str) -> str:
+    cleaned = re.sub(r"\s+", " ", str(name or "").strip().lower())
+    cleaned = re.sub(r"[^a-z0-9 #/_-]", "", cleaned)
+    return cleaned
 
 
 def parse_mapping(upload: UploadFile) -> List[dict]:
     """
-    Read the mapping file into a normalized schema using the strict legacy format:
-    columns: source_col, output_col, default
+    Read mapping using the strict format:
+    output_col, report_name, column_name, possible_variations
     """
     try:
         mapping_df = pd.read_excel(upload.file, engine="openpyxl")
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Failed to read mapping file: {exc}")
 
-    columns_lower = {col.strip().lower() for col in mapping_df.columns}
-
-    if not {"source_col", "output_col", "default"}.issubset(columns_lower):
+    normalized_cols = {normalize_column_name(c): c for c in mapping_df.columns}
+    required = {"output_col", "report_name", "column_name", "possible_variations"}
+    if not required.issubset(set(normalized_cols.keys())):
+        missing = required - set(normalized_cols.keys())
         raise HTTPException(
             status_code=400,
-            detail="Mapping file missing required columns: source_col, output_col, default",
+            detail=f"Mapping file missing required columns: {', '.join(sorted(missing))}",
         )
 
-    source_col = _find_column(mapping_df, "source_col")
-    output_col = _find_column(mapping_df, "output_col")
-    default_col = _find_column(mapping_df, "default")
-
-    mapping_schema = []
+    rules: List[dict] = []
     for _, row in mapping_df.iterrows():
-        sources_raw = str(row[source_col]) if pd.notna(row[source_col]) else ""
-        sources = [col.strip() for col in sources_raw.split(",") if col.strip()]
-        if not sources:
-            raise HTTPException(status_code=400, detail="Each mapping row needs at least one source_col")
-        mapping_schema.append(
+        output_col = str(row.get(normalized_cols["output_col"], "")).strip()
+        report_name = str(row.get(normalized_cols["report_name"], "")).strip()
+        column_name = str(row.get(normalized_cols["column_name"], "")).strip()
+        variations_raw = str(row.get(normalized_cols["possible_variations"], "")).strip()
+        if not output_col or not report_name or not column_name:
+            continue
+        variations = (
+            [v.strip() for v in variations_raw.replace(";", ",").split(",") if v.strip()]
+            if variations_raw
+            else []
+        )
+        rules.append(
             {
-                "sources": _unique_preserve_order(sources),
-                "output": str(row[output_col]).strip(),
-                "default": "" if pd.isna(row[default_col]) else row[default_col],
-                "report": None,
+                "output_col": output_col,
+                "report_name": report_name,
+                "report_key": normalize_report_name(report_name),
+                "column_name": column_name,
+                "variations": variations,
             }
         )
 
-    if not mapping_schema:
+    if not rules:
         raise HTTPException(status_code=400, detail="Mapping file contained no usable rows.")
-    return mapping_schema
-
+    return rules
 
 def parse_template(upload: UploadFile) -> List[str]:
     """
@@ -190,7 +188,7 @@ def find_header_row(raw_df: pd.DataFrame, candidate_names: set) -> int:
     return best_row
 
 
-def clean_dataframe(raw_df: pd.DataFrame, mapping_schema: List[dict]) -> pd.DataFrame:
+def clean_dataframe(raw_df: pd.DataFrame, mapping_rules: List[dict]) -> pd.DataFrame:
     """
     Clean messy inputs where headers or metadata occupy top rows.
     Strategy:
@@ -199,11 +197,13 @@ def clean_dataframe(raw_df: pd.DataFrame, mapping_schema: List[dict]) -> pd.Data
       - Use that row as header and drop rows above it.
       - Drop rows/columns that are entirely empty after header assignment.
     """
-    # Build set of candidate header tokens from mapping sources and outputs.
+    # Build set of candidate header tokens from mapping columns and variations.
     candidate_names = set()
-    for rule in mapping_schema:
-        candidate_names.update([src.lower() for src in rule["sources"]])
-        candidate_names.add(rule["output"].lower())
+    for rule in mapping_rules:
+        candidate_names.add(rule["column_name"].lower())
+        candidate_names.add(rule["output_col"].lower())
+        for var in rule.get("variations", []):
+            candidate_names.add(var.lower())
 
     header_index = find_header_row(raw_df, candidate_names)
 
@@ -231,7 +231,7 @@ def clean_dataframe(raw_df: pd.DataFrame, mapping_schema: List[dict]) -> pd.Data
     return data_df
 
 
-def read_input_file(upload: UploadFile, mapping_schema: List[dict]) -> pd.DataFrame:
+def read_input_file(upload: UploadFile, mapping_rules: List[dict]) -> pd.DataFrame:
     """
     Read an uploaded CSV or Excel file into a cleaned DataFrame.
     Handles messy headers by scanning for the likely header row.
@@ -244,72 +244,9 @@ def read_input_file(upload: UploadFile, mapping_schema: List[dict]) -> pd.DataFr
             raw_df = pd.read_excel(upload.file, engine="xlrd", header=None)
         else:
             raw_df = pd.read_excel(upload.file, engine="openpyxl", header=None)
-        return clean_dataframe(raw_df, mapping_schema)
+        return clean_dataframe(raw_df, mapping_rules)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Failed to read input file {upload.filename}: {exc}")
-
-
-def transform_rows(mapping_schema: List[dict], dataframes: List[pd.DataFrame]) -> pd.DataFrame:
-    """
-    Apply mapping rules across all provided DataFrames and return one unified DataFrame.
-    """
-    transformed_rows = []
-
-    for df in dataframes:
-        # Normalize column names for easier matching
-        normalized_cols = {col.lower(): col for col in df.columns}
-
-        for _, row in df.iterrows():
-            output_row = {}
-            for rule in mapping_schema:
-                value = None
-                for source in rule["sources"]:
-                    # Match case-insensitive to be forgiving
-                    source_key = source.lower().strip()
-                    if source_key in normalized_cols:
-                        raw_val = row[normalized_cols[source_key]]
-                        if pd.notna(raw_val):
-                            value = raw_val
-                            break
-                if value is None:
-                    value = rule.get("default", "")
-                output_row[rule["output"]] = value
-            transformed_rows.append(output_row)
-
-    # If there were no rows at all, return an empty DataFrame with mapping outputs as columns.
-    if not transformed_rows:
-        return pd.DataFrame(columns=[rule["output"] for rule in mapping_schema])
-
-    return pd.DataFrame(transformed_rows)
-
-
-def apply_template_order(df: pd.DataFrame, template_order: Optional[List[str]], mapping_schema: List[dict]) -> pd.DataFrame:
-    """
-    Reorder DataFrame columns according to template_order if provided.
-    Behavior: columns not in the template are appended at the end (documented choice).
-    If no template is provided, the order follows mapping_schema output order.
-    """
-    if template_order:
-        # Ensure all template columns exist; fill missing with empty string.
-        for col in template_order:
-            if col not in df.columns:
-                df[col] = ""
-
-        # Reindex to template order first
-        ordered_cols = template_order.copy()
-        # Append any extra mapped columns not present in template to preserve data.
-        extras = [col for col in df.columns if col not in ordered_cols]
-        ordered_cols.extend(extras)
-        return df.reindex(columns=ordered_cols)
-
-    # No template: follow mapping order as the default ordering policy.
-    mapping_order = [rule["output"] for rule in mapping_schema]
-    extras = [col for col in df.columns if col not in mapping_order]
-    ordered_cols = mapping_order + extras
-    for col in ordered_cols:
-        if col not in df.columns:
-            df[col] = ""
-    return df.reindex(columns=ordered_cols)
 
 
 def standardize_date_format(value, output_format: str = "%Y-%m-%d") -> str:
@@ -377,198 +314,222 @@ def clean_currency(value) -> float:
         return 0.0
 
 
-def normalize_column_name(name: str) -> str:
-    return re.sub(r"\s+", " ", str(name).strip().lower())
-
-
-def determine_report_for_file(mapping_schema: List[dict], filename: str) -> Optional[str]:
-    """Try to pick a report name based on the filename when report-specific mappings exist."""
-    reports = [rule["report"] for rule in mapping_schema if rule.get("report")]
-    if not reports:
+def find_matching_column(df: pd.DataFrame, base_name: str, variations: Iterable[str]) -> Optional[str]:
+    """
+    Resolve the best matching column in df for the given base_name/variations.
+    Strategy:
+    - Exact raw match.
+    - Exact normalized match.
+    - Variation raw/normalized match.
+    - Partial/fuzzy contains on normalized names.
+    Returns the original column name or None.
+    """
+    if df is None or df.empty:
         return None
-    fname = filename.lower()
-    for report in reports:
-        if report and report.lower() in fname:
-            return report
+
+    base_name = base_name or ""
+    variation_list = [v for v in variations if v] if variations else []
+    normalized_lookup = {normalize_column_name(col): col for col in df.columns}
+
+    if base_name in df.columns:
+        return base_name
+
+    base_norm = normalize_column_name(base_name)
+    if base_norm in normalized_lookup:
+        return normalized_lookup[base_norm]
+
+    for v in variation_list:
+        if v in df.columns:
+            return v
+        v_norm = normalize_column_name(v)
+        if v_norm in normalized_lookup:
+            return normalized_lookup[v_norm]
+
+    candidates = []
+    for norm, original in normalized_lookup.items():
+        score = 0
+        if base_norm and base_norm in norm:
+            score += 2
+        for v in variation_list:
+            v_norm = normalize_column_name(v)
+            if v_norm and v_norm in norm:
+                score += 1
+        if score > 0:
+            candidates.append((score, original))
+
+    if candidates:
+        candidates.sort(key=lambda x: (-x[0], x[1]))
+        return candidates[0][1]
+
     return None
 
 
-def map_dataframe_to_outputs(df: pd.DataFrame, mapping_schema: List[dict], filename: str) -> pd.DataFrame:
+def select_join_key(
+    dataframes: Dict[str, pd.DataFrame], normalized_columns: Dict[str, Dict[str, str]]
+) -> Tuple[Optional[str], Dict[str, str]]:
     """
-    Rename/map columns to the standardized output columns using the parsed mapping schema.
-    Falls back to defaults when a source column is missing.
+    Detect a join key across source dataframes.
+    Returns (normalized_key, per_report_original_name) or (None, {}).
     """
-    selected_report = determine_report_for_file(mapping_schema, filename)
-    rules = [
-        rule
-        for rule in mapping_schema
-        if not rule.get("report") or rule.get("report") == selected_report
-    ]
-    if not rules:
-        rules = mapping_schema
-
-    normalized_cols = {normalize_column_name(col): col for col in df.columns}
-    mapped_columns: Dict[str, pd.Series] = {}
-
-    for rule in rules:
-        output = rule["output"]
-        for source in rule["sources"]:
-            key = normalize_column_name(source)
-            if key in normalized_cols:
-                mapped_columns[output] = df[normalized_cols[key]]
-                break
-        if output not in mapped_columns:
-            default_value = "" if pd.isna(rule.get("default", "")) else rule.get("default", "")
-            mapped_columns[output] = pd.Series([default_value] * len(df))
-
-    return pd.DataFrame(mapped_columns)
-
-
-def detect_merge_key(dataframes: List[pd.DataFrame], template_order: Optional[List[str]]) -> str:
-    """
-    Choose a merge key. Prefer 'Space' (common in the provided mapping). Otherwise
-    use the first template column, or the first column of the first dataframe.
-    """
-    if any("space" == col.lower().strip() for df in dataframes for col in df.columns):
-        return "Space"
-    if template_order:
-        return template_order[0]
-    return dataframes[0].columns[0]
-
-
-def merge_mapped_dataframes(dataframes: List[pd.DataFrame], merge_key: str) -> pd.DataFrame:
-    """Outer-merge mapped dataframes on the merge key, combining duplicate columns."""
     if not dataframes:
-        return pd.DataFrame()
+        return None, {}
 
-    prepared = []
-    for df in dataframes:
-        df_copy = df.copy()
-        if merge_key not in df_copy.columns:
-            df_copy[merge_key] = ""
-        prepared.append(df_copy)
+    presence: Dict[str, List[str]] = {}
+    for report, norm_map in normalized_columns.items():
+        for norm in norm_map.keys():
+            presence.setdefault(norm, []).append(report)
 
-    merged = prepared[0]
-    for df in prepared[1:]:
-        overlap = set(merged.columns) & set(df.columns) - {merge_key}
-        merged = merged.merge(df, on=merge_key, how="outer", suffixes=("", "_dup"))
-        for col in overlap:
-            dup_col = f"{col}_dup"
-            if dup_col in merged.columns:
-                try:
-                    merged[col] = merged[col].combine_first(merged[dup_col])
-                except Exception:
-                    merged[col] = merged[col].fillna(merged[dup_col])
-                merged = merged.drop(columns=[dup_col])
-    return merged
+    candidates = {norm: reps for norm, reps in presence.items() if len(reps) >= 2}
+    if not candidates:
+        return None, {}
+
+    def score_norm(norm: str, reports: List[str]) -> float:
+        name_bonus = 0
+        if any(k in norm for k in ["id", "email", "address", "space", "unit"]):
+            name_bonus += 1
+        uniques = []
+        coverages = []
+        for rep in reports:
+            df = dataframes[rep]
+            col = normalized_columns[rep][norm]
+            series = df[col]
+            non_null = series.dropna()
+            if len(series) == 0:
+                continue
+            uniques.append(non_null.nunique() / max(len(non_null), 1))
+            coverages.append(len(non_null) / max(len(series), 1))
+        avg_unique = np.mean(uniques) if uniques else 0
+        avg_cov = np.mean(coverages) if coverages else 0
+        return (len(reports) * 2) + avg_unique + avg_cov + name_bonus
+
+    best_norm = None
+    best_score = -1
+    for norm, reps in candidates.items():
+        sc = score_norm(norm, reps)
+        if sc > best_score:
+            best_score = sc
+            best_norm = norm
+
+    if not best_norm:
+        return None, {}
+
+    per_report = {
+        rep: normalized_columns[rep][best_norm]
+        for rep in presence.get(best_norm, [])
+        if best_norm in normalized_columns[rep]
+    }
+    return best_norm, per_report
+
+
+def collect_master_keys(
+    dataframes: Dict[str, pd.DataFrame], join_key_norm: Optional[str], per_report_key: Dict[str, str]
+) -> List:
+    if not join_key_norm:
+        return []
+    keys = set()
+    for report, df in dataframes.items():
+        col = per_report_key.get(report)
+        if not col or col not in df.columns:
+            continue
+        valid_keys = df[col].dropna()
+        valid_keys = [v for v in valid_keys if str(v).strip() != ""]
+        keys.update(valid_keys)
+    return list(keys)
+
+
+def build_output_from_mapping(
+    mapping_rules: List[dict],
+    dataframes: Dict[str, pd.DataFrame],
+    normalized_columns: Dict[str, Dict[str, str]],
+    template_order: Optional[List[str]],
+) -> pd.DataFrame:
+    """Construct the final output using mapping rules and row-level matching."""
+    if not mapping_rules:
+        raise ValueError("Mapping rules not loaded.")
+    if not dataframes:
+        raise ValueError("No data files provided.")
+
+    join_key_norm, per_report_key = select_join_key(dataframes, normalized_columns)
+    master_keys = collect_master_keys(dataframes, join_key_norm, per_report_key)
+    if master_keys:
+        master_keys = sorted(master_keys, key=lambda x: str(x))
+
+    resolved_columns: Dict[str, Dict[Tuple[str, str], Optional[str]]] = {}
+
+    def resolve_column(report: str, base: str, variations: List[str]) -> Optional[str]:
+        cache = resolved_columns.setdefault(report, {})
+        key = (base, ",".join(variations))
+        if key in cache:
+            return cache[key]
+        df = dataframes.get(report)
+        col = find_matching_column(df, base, variations) if df is not None else None
+        cache[key] = col
+        return col
+
+    output_rows = []
+
+    if master_keys:
+        for entity_key in master_keys:
+            row_out: Dict[str, object] = {}
+            for rule in mapping_rules:
+                out_col = rule["output_col"]
+                report_key = rule["report_key"]
+                base_col = rule["column_name"]
+                variations = rule.get("variations", [])
+                df = dataframes.get(report_key)
+                value = ""
+                if df is not None:
+                    join_col = per_report_key.get(report_key)
+                    target_col = resolve_column(report_key, base_col, variations)
+                    if join_col and target_col and join_col in df.columns and target_col in df.columns:
+                        matches = df[df[join_col] == entity_key]
+                        if not matches.empty:
+                            value = matches[target_col].iloc[0]
+                    elif target_col and target_col in df.columns and not df.empty:
+                        value = df[target_col].iloc[0]
+                row_out[out_col] = value
+            output_rows.append(row_out)
+    else:
+        max_len = max(len(df) for df in dataframes.values())
+        for idx in range(max_len):
+            row_out = {}
+            for rule in mapping_rules:
+                out_col = rule["output_col"]
+                report_key = rule["report_key"]
+                base_col = rule["column_name"]
+                variations = rule.get("variations", [])
+                df = dataframes.get(report_key)
+                value = ""
+                if df is not None and len(df) > idx:
+                    target_col = resolve_column(report_key, base_col, variations)
+                    if target_col and target_col in df.columns:
+                        value = df[target_col].iloc[idx]
+                row_out[out_col] = value
+            output_rows.append(row_out)
+
+    output_df = pd.DataFrame(output_rows)
+
+    if template_order:
+        for col in template_order:
+            if col not in output_df.columns:
+                output_df[col] = ""
+        extras = [c for c in output_df.columns if c not in template_order]
+        output_df = output_df[template_order + extras]
+    else:
+        mapping_order = [rule["output_col"] for rule in mapping_rules]
+        extras = [c for c in output_df.columns if c not in mapping_order]
+        output_df = output_df[mapping_order + extras]
+
+    output_df = coerce_column_types(output_df)
+    return output_df
 
 
 def coerce_column_types(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Apply light type normalization so numeric/date/boolean/text columns are consistent
-    and missing values are filled sensibly.
+    Copy values through without coercing types. We intentionally avoid
+    converting to booleans/numbers/dates to preserve the source values.
     """
-    numeric_keywords = [
-        "amount",
-        "balance",
-        "rate",
-        "rent",
-        "fee",
-        "charge",
-        "price",
-        "cost",
-        "deposit",
-        "payment",
-        "value",
-        "premium",
-        "discount",
-        "tax",
-        "coverage",
-        "total",
-    ]
-    date_keywords = [
-        "date",
-        "time",
-        "day",
-        "paid",
-        "expiration",
-        "effective",
-        "start",
-        "end",
-        "move",
-        "through",
-        "thru",
-    ]
-    bool_keywords = [
-        "flag",
-        "enabled",
-        "access",
-        "paperless",
-        "autopay",
-        "offline",
-        "business",
-    ]
-    id_keywords = ["id", "number", "code", "#", "serial", "policy", "lease"]
-
-    df_processed = df.copy()
-
-    def clean_currency_or_keep(value):
-        """Convert obvious currency/numeric values to float; otherwise return the original."""
-        if pd.isna(value) or (isinstance(value, str) and value.strip() == ""):
-            return ""
-        try:
-            cleaned = (
-                str(value)
-                .replace("$", "")
-                .replace(",", "")
-                .replace("(", "-")
-                .replace(")", "")
-                .strip()
-            )
-            # If this fails, fall through to return original
-            return float(cleaned)
-        except Exception:
-            return value
-    for col in df_processed.columns:
-        col_lower = col.lower()
-        series = df_processed[col]
-
-        if any(keyword in col_lower for keyword in numeric_keywords):
-            df_processed[col] = series.apply(clean_currency_or_keep)
-            continue
-
-        if any(keyword in col_lower for keyword in date_keywords):
-            df_processed[col] = series.apply(
-                lambda x: standardize_date_format(x) if pd.notna(x) and str(x).strip() else ""
-            )
-            continue
-
-        if any(keyword in col_lower for keyword in bool_keywords):
-            truthy = {"yes", "y", "true", "1", "t"}
-            falsy = {"no", "n", "false", "0", "f"}
-
-            def to_bool(val):
-                if isinstance(val, bool):
-                    return val
-                if pd.isna(val):
-                    return False
-                sval = str(val).strip().lower()
-                if sval in truthy:
-                    return True
-                if sval in falsy:
-                    return False
-                return bool(val)
-
-            df_processed[col] = series.apply(to_bool)
-            continue
-
-        if any(keyword in col_lower for keyword in id_keywords):
-            df_processed[col] = series.astype(str).replace("nan", "").fillna("")
-            continue
-
-        df_processed[col] = series.apply(lambda x: "" if pd.isna(x) else x)
-
-    return df_processed
+    return df.copy()
 
 
 @app.post("/process")
@@ -580,19 +541,18 @@ async def process_files(
     if not files:
         raise HTTPException(status_code=400, detail="At least one data file is required.")
 
-    mapping_schema = parse_mapping(mapping)
+    mapping_rules = parse_mapping(mapping)
     template_order = parse_template(template) if template else None
 
-    cleaned_frames = []
+    dataframes: Dict[str, pd.DataFrame] = {}
+    normalized_columns: Dict[str, Dict[str, str]] = {}
     for upload in files:
-        cleaned_df = read_input_file(upload, mapping_schema)
-        mapped_df = map_dataframe_to_outputs(cleaned_df, mapping_schema, upload.filename)
-        cleaned_frames.append(mapped_df)
+        cleaned_df = read_input_file(upload, mapping_rules)
+        report_key = normalize_report_name(upload.filename)
+        dataframes[report_key] = cleaned_df
+        normalized_columns[report_key] = {normalize_column_name(c): c for c in cleaned_df.columns}
 
-    merge_key = detect_merge_key(cleaned_frames, template_order)
-    merged_df = merge_mapped_dataframes(cleaned_frames, merge_key)
-    merged_df = apply_template_order(merged_df, template_order, mapping_schema)
-    final_df = coerce_column_types(merged_df)
+    final_df = build_output_from_mapping(mapping_rules, dataframes, normalized_columns, template_order)
 
     # Write to a temporary Excel file and return it.
     with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
