@@ -94,7 +94,7 @@ curl -X POST http://localhost:8000/process \
 ---
 
 ## Dummy data generator (Python)
-Use this script to create sample files that match the **strict mapping format**.
+Use this script to create sample files that match the **strict mapping format** (with optional default-only rows).
 
 `scripts/generate_dummy_files.py`
 ```python
@@ -105,13 +105,15 @@ def main(out_dir="samples"):
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
 
-    # Mapping format: output_col, report_name, column_name, possible_variations
+    # Mapping format: output_col, report_name, column_name, possible_variations, default_value (optional)
     # report_name must match the uploaded filename (normalized: lowercase, no extension).
     mapping = pd.DataFrame([
-        {"output_col": "id",    "report_name": "people",   "column_name": "id",            "possible_variations": "identifier"},
-        {"output_col": "name",  "report_name": "people",   "column_name": "name",          "possible_variations": "full name"},
-        {"output_col": "email", "report_name": "contacts", "column_name": "email",         "possible_variations": "e-mail"},
-        {"output_col": "phone", "report_name": "contacts", "column_name": "phone number",  "possible_variations": "phn_no,phone"},
+        {"output_col": "id",    "report_name": "people",   "column_name": "id",            "possible_variations": "identifier", "default_value": ""},
+        {"output_col": "name",  "report_name": "people",   "column_name": "name",          "possible_variations": "full name",  "default_value": ""},
+        {"output_col": "email", "report_name": "contacts", "column_name": "email",         "possible_variations": "e-mail",    "default_value": ""},
+        {"output_col": "phone", "report_name": "contacts", "column_name": "phone number",  "possible_variations": "phn_no,phone", "default_value": ""},
+        # Example default-only row (no report/column needed)
+        {"output_col": "status", "report_name": "", "column_name": "", "possible_variations": "", "default_value": "active"},
     ])
     mapping.to_excel(out / "mapping.xlsx", index=False)
 
@@ -245,6 +247,7 @@ Backend /process
   - `report_name`: exact file name you expect the value to come from (normalized: lowercase, no extension)
   - `column_name`: primary column name to match in that report
   - `possible_variations`: comma/semicolon-separated synonyms for fuzzy matching
+  - `default_value` (mandatory column): used only when `report_name` or `column_name` is blank for that row. We do **not** fall back to defaults if a lookup fails; defaults are explicit-only.
 - Report matching: we normalize the uploaded filename (lowercase, trimmed, drop extension) and match against `report_name` normalized the same way.
 - Column matching order: exact raw → exact normalized → variation raw → variation normalized → partial/fuzzy contains on normalized names.
 - Row matching: if a join key is found across reports, we use that key’s value to select the correct row from each report; otherwise rows are aligned by index.

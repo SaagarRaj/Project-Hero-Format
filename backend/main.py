@@ -36,7 +36,7 @@ def normalize_column_name(name: str) -> str:
 def parse_mapping(upload: UploadFile) -> List[dict]:
     """
     Read mapping using the strict format:
-    output_col, report_name, column_name, possible_variations
+    output_col, report_name, column_name, possible_variations, default_value
     """
     try:
         mapping_df = pd.read_excel(upload.file, engine="openpyxl")
@@ -44,21 +44,30 @@ def parse_mapping(upload: UploadFile) -> List[dict]:
         raise HTTPException(status_code=400, detail=f"Failed to read mapping file: {exc}")
 
     normalized_cols = {normalize_column_name(c): c for c in mapping_df.columns}
-    required = {"output_col", "report_name", "column_name", "possible_variations"}
+    required = {"output_col", "report_name", "column_name", "possible_variations", "default_value"}
     if not required.issubset(set(normalized_cols.keys())):
         missing = required - set(normalized_cols.keys())
         raise HTTPException(
             status_code=400,
             detail=f"Mapping file missing required columns: {', '.join(sorted(missing))}",
         )
+    default_col_name = normalized_cols["default_value"]
 
     rules: List[dict] = []
     for _, row in mapping_df.iterrows():
         output_col = str(row.get(normalized_cols["output_col"], "")).strip()
         report_name = str(row.get(normalized_cols["report_name"], "")).strip()
         column_name = str(row.get(normalized_cols["column_name"], "")).strip()
-        variations_raw = str(row.get(normalized_cols["possible_variations"], "")).strip()
-        if not output_col or not report_name or not column_name:
+        variations_raw = row.get(normalized_cols["possible_variations"], "")
+        variations_raw = "" if pd.isna(variations_raw) else str(variations_raw).strip()
+        default_raw = row.get(default_col_name, "")
+        default_value = "" if pd.isna(default_raw) else str(default_raw).strip()
+        # Default-only rows are allowed only when output_col is present AND report_name/column_name are both empty.
+        if not output_col:
+            continue
+        # Allow default-driven rows when output_col exists and either report/column are missing
+        # but default_value is provided. Otherwise skip.
+        if (not report_name or not column_name) and default_value == "":
             continue
         variations = (
             [v.strip() for v in variations_raw.replace(";", ",").split(",") if v.strip()]
@@ -69,9 +78,10 @@ def parse_mapping(upload: UploadFile) -> List[dict]:
             {
                 "output_col": output_col,
                 "report_name": report_name,
-                "report_key": normalize_report_name(report_name),
+                "report_key": normalize_report_name(report_name) if report_name else "",
                 "column_name": column_name,
                 "variations": variations,
+                "default_value": default_value,
             }
         )
 
@@ -131,6 +141,8 @@ def find_header_row(raw_df: pd.DataFrame, candidate_names: set) -> int:
         "rent",
         "unit",
         "tenant",
+        "space",
+        "tenant name",
         "balance",
         "paid",
         "total",
@@ -476,9 +488,10 @@ def build_output_from_mapping(
                 report_key = rule["report_key"]
                 base_col = rule["column_name"]
                 variations = rule.get("variations", [])
+                default_value = rule.get("default_value", "")
                 df = dataframes.get(report_key)
                 value = ""
-                if df is not None:
+                if df is not None and base_col and report_key:
                     join_col = per_report_key.get(report_key)
                     target_col = resolve_column(report_key, base_col, variations)
                     if join_col and target_col and join_col in df.columns and target_col in df.columns:
@@ -487,6 +500,8 @@ def build_output_from_mapping(
                             value = matches[target_col].iloc[0]
                     elif target_col and target_col in df.columns and not df.empty:
                         value = df[target_col].iloc[0]
+                if value == "" and default_value != "" and (not base_col or not report_key):
+                    value = default_value
                 row_out[out_col] = value
             output_rows.append(row_out)
     else:
@@ -498,12 +513,15 @@ def build_output_from_mapping(
                 report_key = rule["report_key"]
                 base_col = rule["column_name"]
                 variations = rule.get("variations", [])
+                default_value = rule.get("default_value", "")
                 df = dataframes.get(report_key)
                 value = ""
-                if df is not None and len(df) > idx:
+                if df is not None and len(df) > idx and base_col and report_key:
                     target_col = resolve_column(report_key, base_col, variations)
                     if target_col and target_col in df.columns:
                         value = df[target_col].iloc[idx]
+                if value == "" and default_value != "" and (not base_col or not report_key):
+                    value = default_value
                 row_out[out_col] = value
             output_rows.append(row_out)
 
