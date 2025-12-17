@@ -1,6 +1,8 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
+from openpyxl import load_workbook
+from openpyxl.styles import PatternFill
 import pandas as pd
 import numpy as np
 import tempfile
@@ -8,6 +10,7 @@ import os
 import re
 from typing import Dict, Iterable, List, Optional, Tuple
 from starlette.background import BackgroundTask
+from validation import normalize_dataframe
 
 app = FastAPI(title="Mapping Normalization API")
 
@@ -385,6 +388,25 @@ def collect_master_keys(
     return list(keys)
 
 
+def is_blank_value(value) -> bool:
+    """Treat NaN/None/empty-string as blank for default handling."""
+    try:
+        return pd.isna(value) or str(value).strip() == ""
+    except Exception:
+        return False
+
+
+def is_empty_mapping_target(report_key: str, base_col: str) -> Tuple[bool, bool, bool]:
+    """
+    Determine whether mapping targets are provided.
+    Returns (default_only, has_report, has_column).
+    """
+    has_report = bool(str(report_key).strip())
+    has_column = bool(str(base_col).strip())
+    default_only = not has_report and not has_column
+    return default_only, has_report, has_column
+
+
 def build_output_from_mapping(
     mapping_rules: List[dict],
     dataframes: Dict[str, pd.DataFrame],
@@ -425,6 +447,15 @@ def build_output_from_mapping(
                 base_col = rule["column_name"]
                 variations = rule.get("variations", [])
                 default_value = rule.get("default_value", "")
+                default_only, has_report, has_column = is_empty_mapping_target(report_key, base_col)
+                # Critical rule: when both report_name and column_name are empty, always use default_value.
+                if default_only:
+                    row_out[out_col] = default_value
+                    continue
+                # Only attempt file-based extraction when both targets are present; otherwise use default.
+                if not (has_report and has_column):
+                    row_out[out_col] = default_value
+                    continue
                 df = dataframes.get(report_key)
                 value = ""
                 if df is not None and base_col and report_key:
@@ -436,7 +467,7 @@ def build_output_from_mapping(
                             value = matches[target_col].iloc[0]
                     elif target_col and target_col in df.columns and not df.empty:
                         value = df[target_col].iloc[0]
-                if value == "" and default_value != "" and (not base_col or not report_key):
+                if is_blank_value(value) and default_value != "" and (not base_col or not report_key):
                     value = default_value
                 row_out[out_col] = value
             output_rows.append(row_out)
@@ -450,13 +481,22 @@ def build_output_from_mapping(
                 base_col = rule["column_name"]
                 variations = rule.get("variations", [])
                 default_value = rule.get("default_value", "")
+                default_only, has_report, has_column = is_empty_mapping_target(report_key, base_col)
+                # Critical rule: when both report_name and column_name are empty, always use default_value.
+                if default_only:
+                    row_out[out_col] = default_value
+                    continue
+                # Only attempt file-based extraction when both targets are present; otherwise use default.
+                if not (has_report and has_column):
+                    row_out[out_col] = default_value
+                    continue
                 df = dataframes.get(report_key)
                 value = ""
                 if df is not None and len(df) > idx and base_col and report_key:
                     target_col = resolve_column(report_key, base_col, variations)
                     if target_col and target_col in df.columns:
                         value = df[target_col].iloc[idx]
-                if value == "" and default_value != "" and (not base_col or not report_key):
+                if is_blank_value(value) and default_value != "" and (not base_col or not report_key):
                     value = default_value
                 row_out[out_col] = value
             output_rows.append(row_out)
@@ -495,6 +535,14 @@ async def process_files(
     if not files:
         raise HTTPException(status_code=400, detail="At least one data file is required.")
 
+    # Persist mapping upload to disk for reuse in parsing and validation.
+    mapping_suffix = os.path.splitext(mapping.filename or "")[1] or ".xlsx"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=mapping_suffix) as map_tmp:
+        mapping.file.seek(0)
+        map_tmp.write(mapping.file.read())
+        mapping_tmp_path = map_tmp.name
+    mapping.file.seek(0)
+
     mapping_rules = parse_mapping(mapping)
     template_order = parse_template(template) if template else None
 
@@ -506,17 +554,46 @@ async def process_files(
         dataframes[report_key] = cleaned_df
         normalized_columns[report_key] = {normalize_column_name(c): c for c in cleaned_df.columns}
 
-    final_df = build_output_from_mapping(mapping_rules, dataframes, normalized_columns, template_order)
+    merged_df = build_output_from_mapping(mapping_rules, dataframes, normalized_columns, template_order)
+
+    # Validate/normalize merged output.
+    validated_df, invalid_cells = normalize_dataframe(merged_df, mapping_tmp_path)
 
     # Write to a temporary Excel file and return it.
     with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
         tmp_path = tmp.name
-        final_df.to_excel(tmp_path, index=False, engine="openpyxl")
+        validated_df.to_excel(tmp_path, index=False, engine="openpyxl")
+
+    # Highlight invalid cells in red.
+    if invalid_cells:
+        wb = load_workbook(tmp_path)
+        ws = wb.active
+        header_to_col = {cell.value: cell.column for cell in ws[1]}
+        red_fill = PatternFill(start_color="FFFFC7CE", end_color="FFFFC7CE", fill_type="solid")
+        for col, idx_list in invalid_cells.items():
+            col_num = header_to_col.get(col)
+            if not col_num:
+                continue
+            for idx in idx_list:
+                excel_row = idx + 2  # 1-based Excel rows, accounting for header row
+                ws.cell(row=excel_row, column=col_num).fill = red_fill
+        wb.save(tmp_path)
+
+        # Print console report with Excel-style row numbers (1-based, excluding header).
+        print("\nInvalid entries found:")
+        for col, idx_list in invalid_cells.items():
+            rows = [i + 2 for i in idx_list]
+            print(f"- {col}: rows {rows}")
 
     filename = "final_output.xlsx"
     # FileResponse handles opening the file; we use os.remove in background cleanup.
     # BackgroundTask cleans up the temp file after the response is sent.
-    background_task = BackgroundTask(lambda: os.path.exists(tmp_path) and os.remove(tmp_path))
+    background_task = BackgroundTask(
+        lambda: (
+            (os.path.exists(tmp_path) and os.remove(tmp_path)),
+            (os.path.exists(mapping_tmp_path) and os.remove(mapping_tmp_path)),
+        )
+    )
     return FileResponse(
         path=tmp_path,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
