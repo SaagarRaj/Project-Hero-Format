@@ -2,7 +2,7 @@ from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from openpyxl import load_workbook
-from openpyxl.styles import PatternFill
+from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 import pandas as pd
 import numpy as np
 import tempfile
@@ -589,6 +589,24 @@ async def process_files(
                 for idx in idx_list:
                     excel_row = idx + 2
                     ws.cell(row=excel_row, column=col_num).fill = fill
+
+        # Add Invalid Entries sheet with column/invalid rows listing.
+        if invalid_cells:
+            invalid_ws = wb.create_sheet("Invalid Entries")
+            invalid_ws.append(["column", "invalid rows"])
+            for col, idx_list in invalid_cells.items():
+                excel_rows = [str(i + 2) for i in idx_list]  # Excel-style row numbers
+                invalid_ws.append([col, ", ".join(excel_rows)])
+            header_font = Font(bold=True)
+            wrap_alignment = Alignment(wrap_text=True)
+            thin_side = Side(style="thin")
+            full_border = Border(top=thin_side, bottom=thin_side, left=thin_side, right=thin_side)
+            for row in invalid_ws.iter_rows(min_row=1, max_row=invalid_ws.max_row, max_col=2):
+                for cell in row:
+                    if cell.row == 1:
+                        cell.font = header_font
+                    cell.alignment = wrap_alignment
+                    cell.border = full_border
         wb.save(tmp_path)
 
         if invalid_cells:

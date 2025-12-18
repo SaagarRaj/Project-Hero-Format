@@ -549,6 +549,7 @@ def normalize_dataframe(
                 invalid_cells[col] = invalid_idx
             df[col] = col_values
 
+        
         # elif col in BOOLEAN_COLS:
         #     df[col] = df[col].apply(clean_boolean)
 
