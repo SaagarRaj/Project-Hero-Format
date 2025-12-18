@@ -557,33 +557,35 @@ async def process_files(
     merged_df = build_output_from_mapping(mapping_rules, dataframes, normalized_columns, template_order)
 
     # Validate/normalize merged output.
-    validated_df, invalid_cells = normalize_dataframe(merged_df, mapping_tmp_path)
+    validated_df, invalid_cells, highlight_cells = normalize_dataframe(merged_df, mapping_tmp_path)
 
     # Write to a temporary Excel file and return it.
     with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
         tmp_path = tmp.name
         validated_df.to_excel(tmp_path, index=False, engine="openpyxl")
 
-    # Highlight invalid cells in red.
-    if invalid_cells:
+    # Highlight invalid cells (and informational highlights) in red.
+    if invalid_cells or highlight_cells:
         wb = load_workbook(tmp_path)
         ws = wb.active
         header_to_col = {cell.value: cell.column for cell in ws[1]}
         red_fill = PatternFill(start_color="FFFFC7CE", end_color="FFFFC7CE", fill_type="solid")
-        for col, idx_list in invalid_cells.items():
-            col_num = header_to_col.get(col)
-            if not col_num:
-                continue
-            for idx in idx_list:
-                excel_row = idx + 2  # 1-based Excel rows, accounting for header row
-                ws.cell(row=excel_row, column=col_num).fill = red_fill
+        for highlight_map in (invalid_cells, highlight_cells):
+            for col, idx_list in highlight_map.items():
+                col_num = header_to_col.get(col)
+                if not col_num:
+                    continue
+                for idx in idx_list:
+                    excel_row = idx + 2  # 1-based Excel rows, accounting for header row
+                    ws.cell(row=excel_row, column=col_num).fill = red_fill
         wb.save(tmp_path)
 
-        # Print console report with Excel-style row numbers (1-based, excluding header).
-        print("\nInvalid entries found:")
-        for col, idx_list in invalid_cells.items():
-            rows = [i + 2 for i in idx_list]
-            print(f"- {col}: rows {rows}")
+        if invalid_cells:
+            # Print console report with Excel-style row numbers (1-based, excluding header).
+            print("\nInvalid entries found:")
+            for col, idx_list in invalid_cells.items():
+                rows = [i + 2 for i in idx_list]
+                print(f"- {col}: rows {rows}")
 
     filename = "final_output.xlsx"
     # FileResponse handles opening the file; we use os.remove in background cleanup.

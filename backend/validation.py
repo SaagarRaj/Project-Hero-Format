@@ -447,23 +447,36 @@ def compute_space_size(row):
         return f"[{fmt(w)} x {fmt(l)}]"
     return None
 
+def compute_bill_day(val):
+    """Return next day's day-of-month (MM/DD based paid-through date), formatted as two digits."""
+    if pd.isna(val) or str(val).strip() == "":
+        return None
+    dt = pd.to_datetime(val, errors="coerce")
+    if pd.isna(dt):
+        return None
+    next_day = dt + pd.Timedelta(days=1)
+    return int(f"{next_day.day:02d}")
 
 # ---------------------------------------------------------------------------
 # Main normalization pipeline
 # ---------------------------------------------------------------------------
 
-def normalize_dataframe(df: pd.DataFrame, mapping_path: str) -> Tuple[pd.DataFrame, Dict[str, List[int]]]:
+def normalize_dataframe(
+    df: pd.DataFrame, mapping_path: str
+) -> Tuple[pd.DataFrame, Dict[str, List[int]], Dict[str, List[int]]]:
     """
     Accepts a merged DataFrame
     Applies mapping-driven defaults, validation, normalization, and derived column logic
     Returns:
         - cleaned DataFrame
         - invalid_cells: dict[column_name] -> list[row_index]
+        - highlight_cells: dict[column_name] -> list[row_index] (for informational highlighting)
     """
     df = apply_default_values_from_mapping(df, mapping_path)
     df = parse_space_category(df)
     df = df.copy()
     invalid_cells: Dict[str, List[int]] = {}
+    highlight_cells: Dict[str, List[int]] = {}
 
     for col in df.columns:
         if col in PHONE_COLS:
@@ -601,8 +614,33 @@ def normalize_dataframe(df: pd.DataFrame, mapping_path: str) -> Tuple[pd.DataFra
                 invalid_cells[col] = invalid_idx
             df[col] = col_values
 
+
+
+    if "First Name" in df.columns and "Last Name" in df.columns:
+        df["Status"] = df.apply(
+            lambda row: "Occupied"
+            if (pd.notna(row["First Name"]) and str(row["First Name"]).strip() != "")
+            or (pd.notna(row["Last Name"]) and str(row["Last Name"]).strip() != "")
+            else "Vacant",
+            axis=1,
+        )
+
     if "Width" in df.columns and "Length" in df.columns:
+        occupied_mask = (
+            df["Status"].eq("Occupied") if "Status" in df.columns else pd.Series(False, index=df.index)
+        )
+        width_missing_mask = df["Width"].apply(_is_missing) & occupied_mask
+        length_missing_mask = df["Length"].apply(_is_missing) & occupied_mask
+        if width_missing_mask.any():
+            df.loc[width_missing_mask, "Width"] = 1
+        if length_missing_mask.any():
+            df.loc[length_missing_mask, "Length"] = 1
+
         df["Space Size"] = df.apply(compute_space_size, axis=1)
+        default_applied_mask = (width_missing_mask | length_missing_mask) & df["Space Size"].notna()
+        space_size_rows = [idx for idx, applied in default_applied_mask.items() if applied]
+        if space_size_rows:
+            highlight_cells["Space Size"] = space_size_rows
 
     if "State" in df.columns and "Country" in df.columns:
         df.loc[df["State"].apply(lambda x: is_valid_state_abbrev(x) if pd.notna(x) else False), "Country"] = "USA"
@@ -614,14 +652,7 @@ def normalize_dataframe(df: pd.DataFrame, mapping_path: str) -> Tuple[pd.DataFra
             else None,
             axis=1,
         )
+    if "Paid Through Date" in df.columns:
+        df["Bill Day"] = df["Paid Through Date"].apply(compute_bill_day)
 
-    if "First Name" in df.columns and "Last Name" in df.columns:
-        df["Status"] = df.apply(
-            lambda row: "Occupied"
-            if (pd.notna(row["First Name"]) and str(row["First Name"]).strip() != "")
-            or (pd.notna(row["Last Name"]) and str(row["Last Name"]).strip() != "")
-            else "Vacant",
-            axis=1,
-        )
-
-    return df, invalid_cells
+    return df, invalid_cells, highlight_cells
