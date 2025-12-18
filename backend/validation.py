@@ -282,6 +282,55 @@ def apply_default_values_from_mapping(df: pd.DataFrame, mapping_path: str) -> pd
 
 
 # ---------------------------------------------------------------------------
+# Space Category parsing
+# ---------------------------------------------------------------------------
+
+SPACE_CATEGORY_PATTERN = re.compile(
+    r"^\s*(\d+(?:\.\d+)?)\s*[xX]\s*(\d+(?:\.\d+)?)\s*[-]\s*(.+)$"
+)
+
+
+def parse_space_category(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Extract Width/Length/Space Type from 'Space Category' formatted as '5X5-SelfStorage'.
+    Populates missing Width/Length/Space Type, clears the original 'Space Category' entry.
+    """
+    if "Space Category" not in df.columns:
+        return df
+
+    df = df.copy()
+    if "Width" not in df.columns:
+        df["Width"] = None
+    if "Length" not in df.columns:
+        df["Length"] = None
+    if "Space Type" not in df.columns:
+        df["Space Type"] = None
+
+    for idx, raw in df["Space Category"].items():
+        if _is_missing(raw):
+            continue
+        match = SPACE_CATEGORY_PATTERN.match(str(raw))
+        if not match:
+            continue
+        width_val, length_val, storage_type = match.groups()
+        if _is_missing(df.at[idx, "Width"]):
+            try:
+                df.at[idx, "Width"] = float(width_val)
+            except Exception:
+                df.at[idx, "Width"] = width_val
+        if _is_missing(df.at[idx, "Length"]):
+            try:
+                df.at[idx, "Length"] = float(length_val)
+            except Exception:
+                df.at[idx, "Length"] = length_val
+        if _is_missing(df.at[idx, "Space Type"]):
+            df.at[idx, "Space Type"] = storage_type.strip()
+        # Clear the parsed source to avoid duplicative data.
+        df.at[idx, "Space Category"] = None
+    return df
+
+
+# ---------------------------------------------------------------------------
 # Column classification
 # ---------------------------------------------------------------------------
 
@@ -412,6 +461,7 @@ def normalize_dataframe(df: pd.DataFrame, mapping_path: str) -> Tuple[pd.DataFra
         - invalid_cells: dict[column_name] -> list[row_index]
     """
     df = apply_default_values_from_mapping(df, mapping_path)
+    df = parse_space_category(df)
     df = df.copy()
     invalid_cells: Dict[str, List[int]] = {}
 
@@ -432,6 +482,7 @@ def normalize_dataframe(df: pd.DataFrame, mapping_path: str) -> Tuple[pd.DataFra
             if invalid_idx:
                 invalid_cells[col] = invalid_idx
             df[col] = col_values
+        
 
         elif col in CURRENCY_COLS:
             col_values = []
@@ -522,10 +573,11 @@ def normalize_dataframe(df: pd.DataFrame, mapping_path: str) -> Tuple[pd.DataFra
             df[col] = col_values
 
         elif col == "Space Type":
+            # Normalize/overwrite: classify parking vs storage when present, else leave None.
             df[col] = df[col].apply(
-                lambda x: "Storage"
-                if pd.notna(x) and "parking" not in str(x).lower()
-                else ("Parking" if pd.notna(x) and "parking" in str(x).lower() else None)
+                lambda x: "Parking"
+                if pd.notna(x) and "parking" in str(x).lower()
+                else ("Storage" if pd.notna(x) and str(x).strip() != "" else None)
             )
 
         elif col in ZIP_COLS:
@@ -556,13 +608,18 @@ def normalize_dataframe(df: pd.DataFrame, mapping_path: str) -> Tuple[pd.DataFra
         df.loc[df["State"].apply(lambda x: is_valid_state_abbrev(x) if pd.notna(x) else False), "Country"] = "USA"
     
     if "Width" in df.columns and "Length" in df.columns:
-        df["Sq. Ft."] = df.apply(lambda row: row["Width"] * row["Length"], axis=1)
+        df["Sq. Ft."] = df.apply(
+            lambda row: row["Width"] * row["Length"]
+            if pd.notna(row["Width"]) and pd.notna(row["Length"])
+            else None,
+            axis=1,
+        )
 
     if "First Name" in df.columns and "Last Name" in df.columns:
         df["Status"] = df.apply(
-            lambda row: "Not Vacant"
+            lambda row: "Occupied"
             if (pd.notna(row["First Name"]) and str(row["First Name"]).strip() != "")
-            and (pd.notna(row["Last Name"]) and str(row["Last Name"]).strip() != "")
+            or (pd.notna(row["Last Name"]) and str(row["Last Name"]).strip() != "")
             else "Vacant",
             axis=1,
         )
