@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 from decimal import Decimal, ROUND_HALF_UP
+import random
 from typing import Dict, List, Tuple
 
 import pandas as pd
@@ -463,20 +464,20 @@ def compute_bill_day(val):
 
 def normalize_dataframe(
     df: pd.DataFrame, mapping_path: str
-) -> Tuple[pd.DataFrame, Dict[str, List[int]], Dict[str, List[int]]]:
+) -> Tuple[pd.DataFrame, Dict[str, List[int]], Dict[str, Dict[str, List[int]]]]:
     """
     Accepts a merged DataFrame
     Applies mapping-driven defaults, validation, normalization, and derived column logic
     Returns:
         - cleaned DataFrame
         - invalid_cells: dict[column_name] -> list[row_index]
-        - highlight_cells: dict[column_name] -> list[row_index] (for informational highlighting)
+        - highlight_cells: dict[color] -> dict[column_name] -> list[row_index] (for informational highlighting)
     """
     df = apply_default_values_from_mapping(df, mapping_path)
     df = parse_space_category(df)
     df = df.copy()
     invalid_cells: Dict[str, List[int]] = {}
-    highlight_cells: Dict[str, List[int]] = {}
+    highlight_cells: Dict[str, Dict[str, List[int]]] = {"red": {}, "blue": {}}
 
     for col in df.columns:
         if col in PHONE_COLS:
@@ -614,8 +615,6 @@ def normalize_dataframe(
                 invalid_cells[col] = invalid_idx
             df[col] = col_values
 
-
-
     if "First Name" in df.columns and "Last Name" in df.columns:
         df["Status"] = df.apply(
             lambda row: "Occupied"
@@ -624,6 +623,93 @@ def normalize_dataframe(
             else "Vacant",
             axis=1,
         )
+
+    # -----------------------------------------------------------------------
+    # Access Code resolution (derivation/generation + marking)
+    # -----------------------------------------------------------------------
+    def _extract_digits(val: object) -> str | None:
+        if pd.isna(val):
+            return None
+        digits = re.sub(r"\D", "", str(val))
+        return digits if digits else None
+
+    def _is_valid_phone_digits(digits: str | None) -> bool:
+        if not digits:
+            return False
+        if len(digits) < 10:
+            return False
+        last10 = digits[-10:]
+        return last10 != "0000000000"
+
+    def _last4(digits: str | None) -> str | None:
+        if not digits or len(digits) < 4:
+            return None
+        return digits[-4:]
+
+    def _generate_unique_phone(existing: set[str]) -> str:
+        for _ in range(10000):
+            num = random.randint(2000000000, 9999999999)  # 10 digits, first digit >=2
+            digits = f"{num:010d}"
+            if digits.startswith("555"):
+                continue
+            if digits in existing:
+                continue
+            existing.add(digits)
+            return digits
+        raise RuntimeError("Failed to generate a unique phone number.")
+
+    if "Access Code" not in df.columns:
+        df["Access Code"] = None
+
+    used_phone_numbers: set[str] = set()
+    for phone_col in ("Cell Phone", "Alt Cell Phone"):
+        if phone_col in df.columns:
+            for val in df[phone_col]:
+                digits = _extract_digits(val)
+                if _is_valid_phone_digits(digits):
+                    used_phone_numbers.add(digits[-10:])
+
+    if "Access Code" in df.columns:
+        access_code_rows: List[int] = []
+        generated_phone_rows: List[int] = []
+        for idx in df.index:
+            # Only derive/populate for occupied units.
+            status_val = df.at[idx, "Status"] if "Status" in df.columns else None
+            if status_val != "Occupied":
+                continue
+
+            current_access = df.at[idx, "Access Code"]
+            if not _is_missing(current_access):
+                continue  # Leave existing Access Code untouched.
+
+            cell_digits = _extract_digits(df.at[idx, "Cell Phone"]) if "Cell Phone" in df.columns else None
+            alt_digits = _extract_digits(df.at[idx, "Alt Cell Phone"]) if "Alt Cell Phone" in df.columns else None
+
+            selected_digits = None
+            derived_from_phone = False
+            if _is_valid_phone_digits(cell_digits):
+                selected_digits = cell_digits
+                derived_from_phone = True
+            elif _is_valid_phone_digits(alt_digits):
+                selected_digits = alt_digits
+                derived_from_phone = True
+            else:
+                # Generate a new valid, unique phone number and assign to Cell Phone.
+                generated_digits = _generate_unique_phone(used_phone_numbers)
+                df.at[idx, "Cell Phone"] = int(generated_digits)
+                selected_digits = generated_digits
+                generated_phone_rows.append(idx)
+                derived_from_phone = True
+
+            access_code_val = _last4(selected_digits)
+            if access_code_val is not None and derived_from_phone:
+                df.at[idx, "Access Code"] = access_code_val
+                access_code_rows.append(idx)
+
+        if access_code_rows:
+            highlight_cells["blue"]["Access Code"] = access_code_rows
+        if generated_phone_rows:
+            highlight_cells["blue"]["Cell Phone"] = generated_phone_rows
 
     if "Width" in df.columns and "Length" in df.columns:
         occupied_mask = (
@@ -640,7 +726,7 @@ def normalize_dataframe(
         default_applied_mask = (width_missing_mask | length_missing_mask) & df["Space Size"].notna()
         space_size_rows = [idx for idx, applied in default_applied_mask.items() if applied]
         if space_size_rows:
-            highlight_cells["Space Size"] = space_size_rows
+            highlight_cells["red"]["Space Size"] = space_size_rows
 
     if "State" in df.columns and "Country" in df.columns:
         df.loc[df["State"].apply(lambda x: is_valid_state_abbrev(x) if pd.notna(x) else False), "Country"] = "USA"

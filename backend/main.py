@@ -564,20 +564,31 @@ async def process_files(
         tmp_path = tmp.name
         validated_df.to_excel(tmp_path, index=False, engine="openpyxl")
 
-    # Highlight invalid cells (and informational highlights) in red.
-    if invalid_cells or highlight_cells:
+    # Highlight invalid cells in red and informational highlights in their own colors.
+    if invalid_cells or any(col_map for col_map in highlight_cells.values()):
         wb = load_workbook(tmp_path)
         ws = wb.active
         header_to_col = {cell.value: cell.column for cell in ws[1]}
         red_fill = PatternFill(start_color="FFFFC7CE", end_color="FFFFC7CE", fill_type="solid")
-        for highlight_map in (invalid_cells, highlight_cells):
-            for col, idx_list in highlight_map.items():
+        blue_fill = PatternFill(start_color="FFBDD7EE", end_color="FFBDD7EE", fill_type="solid")
+
+        for col, idx_list in invalid_cells.items():
+            col_num = header_to_col.get(col)
+            if not col_num:
+                continue
+            for idx in idx_list:
+                excel_row = idx + 2  # 1-based Excel rows, accounting for header row
+                ws.cell(row=excel_row, column=col_num).fill = red_fill
+
+        for color, col_map in highlight_cells.items():
+            fill = red_fill if color == "red" else blue_fill
+            for col, idx_list in col_map.items():
                 col_num = header_to_col.get(col)
                 if not col_num:
                     continue
                 for idx in idx_list:
-                    excel_row = idx + 2  # 1-based Excel rows, accounting for header row
-                    ws.cell(row=excel_row, column=col_num).fill = red_fill
+                    excel_row = idx + 2
+                    ws.cell(row=excel_row, column=col_num).fill = fill
         wb.save(tmp_path)
 
         if invalid_cells:
