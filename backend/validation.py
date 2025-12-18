@@ -23,28 +23,27 @@ def clean_currency(val):
     """
     Normalize currency:
     - Removes $, commas, spaces
-    - Handles (100) as negative
-    - Returns float with 2 decimals
+    - Uses '-' sign for negatives (parentheses are ignored)
+    - Returns int when value is whole dollars, otherwise float with 2 decimals
     """
     if pd.isna(val):
         return None
 
-    s = str(val).strip()
-    negative = False
+    raw = str(val).strip()
+    negative = "-" in raw
 
-    if s.startswith("(") and s.endswith(")"):
-        negative = True
-        s = s[1:-1]
-
-    s = re.sub(r"[^0-9.]", "", s)
+    s = re.sub(r"[^0-9.]", "", raw)
     if not s:
         return None
 
     num = Decimal(s)
-    if negative:
+    if negative: 
         num = -num
 
-    return float(num.quantize(Decimal("0.00"), rounding=ROUND_HALF_UP))
+    quantized = num.quantize(Decimal("0.00"), rounding=ROUND_HALF_UP)
+    if quantized == quantized.to_integral_value():
+        return int(quantized)
+    return float(quantized)
 
 
 def clean_number(val):
@@ -731,6 +730,8 @@ def normalize_dataframe(
         space_size_rows = [idx for idx, applied in default_applied_mask.items() if applied]
         if space_size_rows:
             highlight_cells["red"]["Space Size"] = space_size_rows
+            highlight_cells["red"]["Sq. Ft."] = space_size_rows
+
 
     if "State" in df.columns and "Country" in df.columns:
         df.loc[df["State"].apply(lambda x: is_valid_state_abbrev(x) if pd.notna(x) else False), "Country"] = "USA"
