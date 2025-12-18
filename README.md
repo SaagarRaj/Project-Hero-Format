@@ -271,3 +271,14 @@ Backend (FastAPI, main.py)
   - coerce_column_types (pass-through)
   - Excel export + temp cleanup
 ```
+
+## Validation & enrichment rules (current)
+- Status: `Occupied` if either First Name or Last Name is present; otherwise `Vacant`.
+- Space defaults: For occupied rows only, missing `Width`/`Length` default to `1`; `Space Size` is computed and highlighted red when a default was used.
+- Access codes & phones:
+  - Priority: keep existing Access Code; else use last 4 of `Cell Phone`; else last 4 of `Alt Cell Phone`; else generate a unique, valid 10-digit US phone and store it in `Cell Phone`, then use its last 4.
+  - Applies only to occupied rows; vacant rows are not backfilled.
+  - Derived/generated Access Codes and generated Cell Phones are highlighted blue. Access Codes are stored as integers when generated.
+- Invalid data tracking:
+  - Invalid cells are highlighted red.
+  - An `Invalid Entries` worksheet is added with columns `column` and `invalid rows`, headers bolded, wrapped, and fully bordered; data rows are wrapped and fully bordered as well.
