@@ -703,7 +703,10 @@ def normalize_dataframe(
 
             access_code_val = _last4(selected_digits)
             if access_code_val is not None and derived_from_phone:
-                df.at[idx, "Access Code"] = access_code_val
+                try:
+                    df.at[idx, "Access Code"] = int(access_code_val)
+                except Exception:
+                    df.at[idx, "Access Code"] = access_code_val
                 access_code_rows.append(idx)
 
         if access_code_rows:
