@@ -27,7 +27,7 @@ def write_error_summary_sheet(wb, invalid_reasons: List[Dict[str, object]]) -> N
         del wb["Error Summary"]
     ws = wb.create_sheet("Error Summary")
 
-    ws.append(["column", "row_number", "reason", "value"])
+    ws.append(["column", "Space ID", "row_number", "reason", "value"])
     invalid_reasons_sorted = sorted(
         invalid_reasons, key=lambda r: (str(r.get("column", "")), r.get("row_index", 0))
     )
@@ -36,10 +36,11 @@ def write_error_summary_sheet(wb, invalid_reasons: List[Dict[str, object]]) -> N
         ws.append(
             [
                 item.get("column", ""),
+                item.get("space", ""),
                 row_number,
                 item.get("reason", ""),
                 item.get("value", ""),
             ]
         )
 
-    _apply_table_style(ws, 1, ws.max_row, 4)
+    _apply_table_style(ws, 1, ws.max_row, 6)

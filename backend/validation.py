@@ -484,9 +484,20 @@ def normalize_dataframe(
     highlight_cells: Dict[str, Dict[str, List[int]]] = {"red": {}, "blue": {}}
     invalid_reasons: List[Dict[str, object]] = []
 
+    def _get_space_value(idx: int) -> object:
+        if "Space" in df.columns:
+            return df.at[idx, "Space"]
+        return None
+
     def add_invalid_reason(idx: int, col: str, value: object, reason: str) -> None:
         invalid_reasons.append(
-            {"row_index": idx, "column": col, "value": value, "reason": reason}
+            {
+                "row_index": idx,
+                "space": _get_space_value(idx),
+                "column": col,
+                "value": value,
+                "reason": reason,
+            }
         )
 
     for col in df.columns:
@@ -729,12 +740,17 @@ def normalize_dataframe(
                 access_code_val = _generate_unique_access_code(used_access_codes)
             try:
                 df.at[idx, "Access Code"] = int(access_code_val)
+                df.at[idx,"Account Code"] = int(access_code_val)
             except Exception:
                 df.at[idx, "Access Code"] = access_code_val
+                df.at[idx,"Account Code"] = access_code_val
+            used_access_codes.add(access_code_val)  
             access_code_rows.append(idx)
 
         if access_code_rows:
             highlight_cells["blue"]["Access Code"] = access_code_rows
+            highlight_cells["blue"]["Account Code"] = access_code_rows
+
 
     if "Width" in df.columns and "Length" in df.columns:
         occupied_mask = (
