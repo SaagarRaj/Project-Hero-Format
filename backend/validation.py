@@ -624,6 +624,36 @@ def normalize_dataframe(
             axis=1,
         )
 
+    
+    if "Status" in df.columns:
+        if "Paid Date" in df.columns:
+            # Paid through date = paid date + 1 month - 1 day
+            def _calc_paid_through(row):
+                if row.get("Status") != "Occupied":
+                    return row.get("Paid Through Date")
+                if not _is_missing(row.get("Paid Through Date")):
+                    return row.get("Paid Through Date")
+                paid_date = pd.to_datetime(row.get("Paid Date"), errors="coerce")
+                if pd.isna(paid_date):
+                    return None
+                paid_through = paid_date + pd.DateOffset(months=1) - pd.DateOffset(days=1)
+                return paid_through.strftime("%m/%d/%y")
+
+            df["Paid Through Date"] = df.apply(_calc_paid_through, axis=1)
+            
+    if "Status" in df.columns:
+        occupied_mask = df["Status"].eq("Occupied")
+
+        for paid_col in ("Paid Through Date", "Paid Date"):
+            if paid_col in df.columns:
+                missing_mask = df[paid_col].apply(_is_missing) & occupied_mask
+                if missing_mask.any():
+                    highlight_cells["red"][paid_col] = [
+                        idx for idx, missing in missing_mask.items() if missing
+                    ]
+    
+    
+        
     # -----------------------------------------------------------------------
     # Access Code resolution (derivation/generation + marking)
     # -----------------------------------------------------------------------
@@ -633,45 +663,33 @@ def normalize_dataframe(
         digits = re.sub(r"\D", "", str(val))
         return digits if digits else None
 
-    def _is_valid_phone_digits(digits: str | None) -> bool:
-        if not digits:
-            return False
-        if len(digits) < 10:
-            return False
-        last10 = digits[-10:]
-        return last10 != "0000000000"
-
     def _last4(digits: str | None) -> str | None:
         if not digits or len(digits) < 4:
             return None
         return digits[-4:]
 
-    def _generate_unique_phone(existing: set[str]) -> str:
+    def _generate_unique_access_code(existing: set[str]) -> str:
         for _ in range(10000):
-            num = random.randint(2000000000, 9999999999)  # 10 digits, first digit >=2
-            digits = f"{num:010d}"
-            if digits.startswith("555"):
+            code = f"{random.randint(1000, 9999)}"
+            if code in existing:
                 continue
-            if digits in existing:
-                continue
-            existing.add(digits)
-            return digits
-        raise RuntimeError("Failed to generate a unique phone number.")
+            existing.add(code)
+            return code
+        raise RuntimeError("Failed to generate a unique access code.")
 
     if "Access Code" not in df.columns:
         df["Access Code"] = None
 
-    used_phone_numbers: set[str] = set()
-    for phone_col in ("Cell Phone", "Alt Cell Phone"):
-        if phone_col in df.columns:
-            for val in df[phone_col]:
-                digits = _extract_digits(val)
-                if _is_valid_phone_digits(digits):
-                    used_phone_numbers.add(digits[-10:])
+    used_access_codes: set[str] = set()
+    if "Access Code" in df.columns:
+        for val in df["Access Code"]:
+            digits = _extract_digits(val)
+            last4 = _last4(digits)
+            if last4:
+                used_access_codes.add(last4)
 
     if "Access Code" in df.columns:
         access_code_rows: List[int] = []
-        generated_phone_rows: List[int] = []
         for idx in df.index:
             # Only derive/populate for occupied units.
             status_val = df.at[idx, "Status"] if "Status" in df.columns else None
@@ -685,34 +703,17 @@ def normalize_dataframe(
             cell_digits = _extract_digits(df.at[idx, "Cell Phone"]) if "Cell Phone" in df.columns else None
             alt_digits = _extract_digits(df.at[idx, "Alt Cell Phone"]) if "Alt Cell Phone" in df.columns else None
 
-            selected_digits = None
-            derived_from_phone = False
-            if _is_valid_phone_digits(cell_digits):
-                selected_digits = cell_digits
-                derived_from_phone = True
-            elif _is_valid_phone_digits(alt_digits):
-                selected_digits = alt_digits
-                derived_from_phone = True
-            else:
-                # Generate a new valid, unique phone number and assign to Cell Phone.
-                generated_digits = _generate_unique_phone(used_phone_numbers)
-                df.at[idx, "Cell Phone"] = int(generated_digits)
-                selected_digits = generated_digits
-                generated_phone_rows.append(idx)
-                derived_from_phone = True
-
-            access_code_val = _last4(selected_digits)
-            if access_code_val is not None and derived_from_phone:
-                try:
-                    df.at[idx, "Access Code"] = int(access_code_val)
-                except Exception:
-                    df.at[idx, "Access Code"] = access_code_val
-                access_code_rows.append(idx)
+            access_code_val = _last4(cell_digits) or _last4(alt_digits)
+            if access_code_val is None:
+                access_code_val = _generate_unique_access_code(used_access_codes)
+            try:
+                df.at[idx, "Access Code"] = int(access_code_val)
+            except Exception:
+                df.at[idx, "Access Code"] = access_code_val
+            access_code_rows.append(idx)
 
         if access_code_rows:
             highlight_cells["blue"]["Access Code"] = access_code_rows
-        if generated_phone_rows:
-            highlight_cells["blue"]["Cell Phone"] = generated_phone_rows
 
     if "Width" in df.columns and "Length" in df.columns:
         occupied_mask = (
@@ -734,7 +735,7 @@ def normalize_dataframe(
 
 
     if "State" in df.columns and "Country" in df.columns:
-        df.loc[df["State"].apply(lambda x: is_valid_state_abbrev(x) if pd.notna(x) else False), "Country"] = "USA"
+        df.loc[df["State"].apply(lambda x: is_valid_state_abbrev(x) if pd.notna(x) else False), "Country"] = "United States"
     
     if "Width" in df.columns and "Length" in df.columns:
         df["Sq. Ft."] = df.apply(
