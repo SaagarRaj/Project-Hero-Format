@@ -12,37 +12,42 @@ from decimal import Decimal, ROUND_HALF_UP
 import random
 from typing import Dict, List, Tuple
 
-import pandas as pd
+import pandas as pd # type: ignore
 
 # ---------------------------------------------------------------------------
 # Cleaning helpers
 # ---------------------------------------------------------------------------
 
-
 def clean_currency(val):
     """
     Normalize currency:
-    - Removes $, commas, spaces
-    - Uses '-' sign for negatives (parentheses are ignored)
-    - Returns int when value is whole dollars, otherwise float with 2 decimals
+    - Removes $, commas, spaces, special chars
+    - ONLY '-' indicates negative
+    - Parentheses are ignored
+    - Returns int when whole dollars, otherwise float with 2 decimals
+    - Returns None for garbage input like '---', '$$$', '()'
     """
     if pd.isna(val):
         return None
 
     raw = str(val).strip()
-    negative = "-" in raw
 
     s = re.sub(r"[^0-9.]", "", raw)
+
     if not s:
-        return None
+        return 0
+
+    negative = "-" in raw
 
     num = Decimal(s)
-    if negative: 
+    if negative:
         num = -num
 
     quantized = num.quantize(Decimal("0.00"), rounding=ROUND_HALF_UP)
+
     if quantized == quantized.to_integral_value():
         return int(quantized)
+
     return float(quantized)
 
 
@@ -463,7 +468,7 @@ def compute_bill_day(val):
 
 def normalize_dataframe(
     df: pd.DataFrame, mapping_path: str
-) -> Tuple[pd.DataFrame, Dict[str, List[int]], Dict[str, Dict[str, List[int]]]]:
+) -> Tuple[pd.DataFrame, Dict[str, List[int]], Dict[str, Dict[str, List[int]]], List[Dict[str, object]]]:
     """
     Accepts a merged DataFrame
     Applies mapping-driven defaults, validation, normalization, and derived column logic
@@ -477,6 +482,12 @@ def normalize_dataframe(
     df = df.copy()
     invalid_cells: Dict[str, List[int]] = {}
     highlight_cells: Dict[str, Dict[str, List[int]]] = {"red": {}, "blue": {}}
+    invalid_reasons: List[Dict[str, object]] = []
+
+    def add_invalid_reason(idx: int, col: str, value: object, reason: str) -> None:
+        invalid_reasons.append(
+            {"row_index": idx, "column": col, "value": value, "reason": reason}
+        )
 
     for col in df.columns:
         if col in PHONE_COLS:
@@ -492,6 +503,7 @@ def normalize_dataframe(
                 else:
                     col_values.append(v)
                     invalid_idx.append(idx)
+                    add_invalid_reason(idx, col, v, "Invalid phone format")
             if invalid_idx:
                 invalid_cells[col] = invalid_idx
             df[col] = col_values
@@ -510,6 +522,7 @@ def normalize_dataframe(
                 else:
                     col_values.append(v)
                     invalid_idx.append(idx)
+                    add_invalid_reason(idx, col, v, "Invalid currency format")
             if invalid_idx:
                 invalid_cells[col] = invalid_idx
             df[col] = col_values
@@ -527,6 +540,7 @@ def normalize_dataframe(
                 else:
                     col_values.append(v)
                     invalid_idx.append(idx)
+                    add_invalid_reason(idx, col, v, "Invalid number")
             if invalid_idx:
                 invalid_cells[col] = invalid_idx
             df[col] = col_values
@@ -544,6 +558,7 @@ def normalize_dataframe(
                 else:
                     col_values.append(v)
                     invalid_idx.append(idx)
+                    add_invalid_reason(idx, col, v, "Invalid date")
             if invalid_idx:
                 invalid_cells[col] = invalid_idx
             df[col] = col_values
@@ -565,6 +580,7 @@ def normalize_dataframe(
                 else:
                     col_values.append(v)
                     invalid_idx.append(idx)
+                    add_invalid_reason(idx, col, v, "Invalid email format")
             if invalid_idx:
                 invalid_cells[col] = invalid_idx
             df[col] = col_values
@@ -582,6 +598,7 @@ def normalize_dataframe(
                 else:
                     col_values.append(v)
                     invalid_idx.append(idx)
+                    add_invalid_reason(idx, col, v, "Invalid state")
             if invalid_idx:
                 invalid_cells[col] = invalid_idx
             df[col] = col_values
@@ -611,6 +628,7 @@ def normalize_dataframe(
                 else:
                     col_values.append(v)
                     invalid_idx.append(idx)
+                    add_invalid_reason(idx, col, v, "Invalid ZIP (expected 5 digits)")
             if invalid_idx:
                 invalid_cells[col] = invalid_idx
             df[col] = col_values
@@ -651,6 +669,9 @@ def normalize_dataframe(
                     highlight_cells["red"][paid_col] = [
                         idx for idx, missing in missing_mask.items() if missing
                     ]
+                    for idx, missing in missing_mask.items():
+                        if missing:
+                            add_invalid_reason(idx, paid_col, None, "Missing required value for occupied status")
     
     
         
@@ -747,4 +768,4 @@ def normalize_dataframe(
     if "Paid Through Date" in df.columns:
         df["Bill Day"] = df["Paid Through Date"].apply(compute_bill_day)
 
-    return df, invalid_cells, highlight_cells
+    return df, invalid_cells, highlight_cells, invalid_reasons

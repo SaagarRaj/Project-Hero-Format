@@ -1,4 +1,5 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException
+# type: ignore
+from fastapi import FastAPI, UploadFile, File, HTTPException 
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from openpyxl import load_workbook
@@ -11,6 +12,7 @@ import re
 from typing import Dict, Iterable, List, Optional, Tuple
 from starlette.background import BackgroundTask
 from validation import normalize_dataframe
+from error_summary import write_error_summary_sheet
 
 app = FastAPI(title="Mapping Normalization API")
 
@@ -557,7 +559,9 @@ async def process_files(
     merged_df = build_output_from_mapping(mapping_rules, dataframes, normalized_columns, template_order)
 
     # Validate/normalize merged output.
-    validated_df, invalid_cells, highlight_cells = normalize_dataframe(merged_df, mapping_tmp_path)
+    validated_df, invalid_cells, highlight_cells, invalid_reasons = normalize_dataframe(
+        merged_df, mapping_tmp_path
+    )
 
     # Write to a temporary Excel file and return it.
     with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
@@ -607,6 +611,7 @@ async def process_files(
                         cell.font = header_font
                     cell.alignment = wrap_alignment
                     cell.border = full_border
+            write_error_summary_sheet(wb, invalid_reasons)
         wb.save(tmp_path)
 
         if invalid_cells:
