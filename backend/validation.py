@@ -6,12 +6,10 @@ does not perform any file I/O.
 """
 
 from __future__ import annotations
-
 import re
 from decimal import Decimal, ROUND_HALF_UP
 import random
 from typing import Dict, List, Tuple
-
 import pandas as pd # type: ignore
 
 # ---------------------------------------------------------------------------
@@ -643,6 +641,13 @@ def normalize_dataframe(
             if invalid_idx:
                 invalid_cells[col] = invalid_idx
             df[col] = col_values
+
+    if "Move In Date" in df.columns and "Paid Date" in df.columns:
+        missing_move_in_mask = df["Move In Date"].apply(_is_missing)
+        paid_present_mask = ~df["Paid Date"].apply(_is_missing)
+        df.loc[missing_move_in_mask & paid_present_mask, "Move In Date"] = df.loc[
+            missing_move_in_mask & paid_present_mask, "Paid Date"
+        ]
 
     if "First Name" in df.columns and "Last Name" in df.columns:
         df["Status"] = df.apply(

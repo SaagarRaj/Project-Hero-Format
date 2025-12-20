@@ -2,12 +2,11 @@ from __future__ import annotations
 
 from typing import Dict, List
 
-from openpyxl.styles import Alignment, Border, Font, Side # type: ignore #typ
+from openpyxl.styles import Border, Font, Side # type: ignore #typ
 
 
 def _apply_table_style(ws, start_row: int, end_row: int, end_col: int) -> None:
     header_font = Font(bold=True)
-    wrap_alignment = Alignment(wrap_text=True)
     thin_side = Side(style="thin")
     full_border = Border(top=thin_side, bottom=thin_side, left=thin_side, right=thin_side)
 
@@ -15,7 +14,6 @@ def _apply_table_style(ws, start_row: int, end_row: int, end_col: int) -> None:
         for cell in row:
             if cell.row == start_row:
                 cell.font = header_font
-            cell.alignment = wrap_alignment
             cell.border = full_border
 
 
