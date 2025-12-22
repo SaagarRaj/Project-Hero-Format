@@ -13,6 +13,7 @@ export default function Page() {
   const [status, setStatus] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [ownerName, setOwnerName] = useState("");
+  const [migrationDate, setMigrationDate] = useState("");
 
   const backendUrl =
     process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
@@ -33,6 +34,10 @@ export default function Page() {
       setStatus("Please enter an owner name.");
       return;
     }
+    if (!migrationDate) {
+      setStatus("Please enter a migration date.");
+      return;
+    }
 
     const formData = new FormData();
     formData.append("mapping", mappingFile);
@@ -43,6 +48,7 @@ export default function Page() {
       formData.append("files", file);
     });
     formData.append("owner_name", ownerName);
+    formData.append("migration_date", migrationDate);
 
     setIsSubmitting(true);
     try {
@@ -83,7 +89,9 @@ export default function Page() {
         </p>
         <form onSubmit={handleSubmit}>
           <div className="section">
-            <Label htmlFor="mapping">Mapping file (required)</Label>
+            <Label htmlFor="mapping">
+              Mapping file <span className="required">*</span>
+            </Label>
             <Input
               id="mapping"
               type="file"
@@ -92,41 +100,58 @@ export default function Page() {
             />
           </div>
 
-          <div className="section">
-            <Label htmlFor="template">Template file (optional)</Label>
-            <Input
-              id="template"
-              type="file"
-              accept=".xlsx,.xls"
-              onChange={(e) => setTemplateFile(e.target.files?.[0] ?? null)}
-            />
-          </div>
-
-          <div className="section">
-            <Label htmlFor="data">
-              Input files (CSV or Excel, one or more)
-            </Label>
-            <Input
-              id="data"
-              type="file"
-              multiple
-              accept=".csv,.xlsx,.xls"
-              onChange={(e) => setDataFiles(e.target.files ?? [])}
-            />
-            <div className="files-hint">
-              We will merge and normalize all provided files.
+          <div className="split-fields">
+            <div className="section">
+              <Label htmlFor="data">
+                Input files (CSV or Excel, one or more){" "}
+                <span className="required">*</span>
+              </Label>
+              <Input
+                id="data"
+                type="file"
+                multiple
+                accept=".csv,.xlsx,.xls"
+                onChange={(e) => setDataFiles(e.target.files ?? [])}
+              />
+              <div className="files-hint">
+                We will merge and normalize all provided files.
+              </div>
+            </div>
+            <div className="section">
+              <Label htmlFor="template">Template file (optional)</Label>
+              <Input
+                id="template"
+                type="file"
+                accept=".xlsx,.xls"
+                onChange={(e) => setTemplateFile(e.target.files?.[0] ?? null)}
+              />
             </div>
           </div>
 
-          <div className="section">
-            <Label htmlFor="data">Owner name (required)</Label>
-            <Input
-              id="data"
-              type="text"
-              onChange={(e) => setOwnerName(e.target.value)}
-            />
-            <div className="files-hint">
-              We will merge and normalize Owner name in the final output file.
+          <div className="split-fields">
+            <div className="section">
+              <Label htmlFor="data">
+                Owner name <span className="required">*</span>
+              </Label>
+              <Input
+                id="data"
+                type="text"
+                onChange={(e) => setOwnerName(e.target.value)}
+              />
+              <div className="files-hint">
+                We will merge and normalize Owner name in the final output file.
+              </div>
+            </div>
+
+            <div className="section">
+              <Label htmlFor="migration-date">
+                Date of Migration <span className="required">*</span>
+              </Label>
+              <Input
+                id="migration-date"
+                type="date"
+                onChange={(e) => setMigrationDate(e.target.value)}
+              />
             </div>
           </div>
 
