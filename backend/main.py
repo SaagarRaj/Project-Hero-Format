@@ -1,5 +1,5 @@
 # type: ignore
-from fastapi import FastAPI, UploadFile, File, HTTPException 
+from fastapi import FastAPI, UploadFile, File, HTTPException,Form
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from openpyxl import load_workbook
@@ -414,6 +414,7 @@ def build_output_from_mapping(
     dataframes: Dict[str, pd.DataFrame],
     normalized_columns: Dict[str, Dict[str, str]],
     template_order: Optional[List[str]],
+    owner_name: str
 ) -> pd.DataFrame:
     """Construct the final output using mapping rules and row-level matching."""
     if not mapping_rules:
@@ -439,6 +440,10 @@ def build_output_from_mapping(
         return col
 
     output_rows = []
+    owner_col_norms = {
+        normalize_column_name("Owner"),
+        normalize_column_name("name"),
+    }
 
     if master_keys:
         for entity_key in master_keys:
@@ -449,6 +454,9 @@ def build_output_from_mapping(
                 base_col = rule["column_name"]
                 variations = rule.get("variations", [])
                 default_value = rule.get("default_value", "")
+                if normalize_column_name(out_col) in owner_col_norms:
+                    row_out[out_col] = owner_name
+                    continue
                 default_only, has_report, has_column = is_empty_mapping_target(report_key, base_col)
                 # Critical rule: when both report_name and column_name are empty, always use default_value.
                 if default_only:
@@ -483,6 +491,9 @@ def build_output_from_mapping(
                 base_col = rule["column_name"]
                 variations = rule.get("variations", [])
                 default_value = rule.get("default_value", "")
+                if normalize_column_name(out_col) in owner_col_norms:
+                    row_out[out_col] = owner_name
+                    continue
                 default_only, has_report, has_column = is_empty_mapping_target(report_key, base_col)
                 # Critical rule: when both report_name and column_name are empty, always use default_value.
                 if default_only:
@@ -504,6 +515,10 @@ def build_output_from_mapping(
             output_rows.append(row_out)
 
     output_df = pd.DataFrame(output_rows)
+    if not any(normalize_column_name(c) == normalize_column_name("Owner") for c in output_df.columns):
+        output_df["Owner"] = owner_name
+    if not any(normalize_column_name(c) == normalize_column_name("name") for c in output_df.columns):
+        output_df["name"] = owner_name
 
     if template_order:
         for col in template_order:
@@ -533,7 +548,10 @@ async def process_files(
     mapping: UploadFile = File(...),
     files: List[UploadFile] = File(...),
     template: Optional[UploadFile] = File(None),
+    owner_name: str = Form(...),
 ):
+    if not owner_name or owner_name.strip() == "":
+        raise HTTPException(status_code=400, detail="Owner name is required.")
     if not files:
         raise HTTPException(status_code=400, detail="At least one data file is required.")
 
@@ -556,7 +574,13 @@ async def process_files(
         dataframes[report_key] = cleaned_df
         normalized_columns[report_key] = {normalize_column_name(c): c for c in cleaned_df.columns}
 
-    merged_df = build_output_from_mapping(mapping_rules, dataframes, normalized_columns, template_order)
+    merged_df = build_output_from_mapping(
+        mapping_rules,
+        dataframes,
+        normalized_columns,
+        template_order,
+        owner_name.strip(),
+    )
 
     # Validate/normalize merged output.
     validated_df, invalid_cells, highlight_cells, invalid_reasons = normalize_dataframe(
