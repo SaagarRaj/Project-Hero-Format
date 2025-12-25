@@ -500,6 +500,7 @@ def normalize_dataframe(
 
     for col in df.columns:
         if col in PHONE_COLS:
+            # Validate and normalize phone numbers; flag invalid formats.
             col_values = []
             invalid_idx = []
             for idx, v in df[col].items():
@@ -519,6 +520,7 @@ def normalize_dataframe(
         
 
         elif col in CURRENCY_COLS:
+            # Normalize currency values; flag invalid currency formats.
             col_values = []
             invalid_idx = []
             for idx, v in df[col].items():
@@ -537,6 +539,7 @@ def normalize_dataframe(
             df[col] = col_values
 
         elif col in NUMBER_COLS:
+            # Normalize numeric fields; flag non-numeric inputs.
             col_values = []
             invalid_idx = []
             for idx, v in df[col].items():
@@ -555,6 +558,7 @@ def normalize_dataframe(
             df[col] = col_values
 
         elif col in DATE_COLS:
+            # Normalize dates to MM/DD/YY; flag invalid date values.
             col_values = []
             invalid_idx = []
             for idx, v in df[col].items():
@@ -577,6 +581,7 @@ def normalize_dataframe(
         #     df[col] = df[col].apply(clean_boolean)
 
         elif col in EMAIL_COLS:
+            # Lowercase and validate emails; flag invalid addresses.
             col_values = []
             invalid_idx = []
             for idx, v in df[col].items():
@@ -595,6 +600,7 @@ def normalize_dataframe(
             df[col] = col_values
 
         elif col in STATE_COLS:
+            # Normalize state names/abbreviations; flag invalid states.
             col_values = []
             invalid_idx = []
             for idx, v in df[col].items():
@@ -621,6 +627,7 @@ def normalize_dataframe(
             )
 
         elif col in ZIP_COLS:
+            # Normalize ZIP to 5 digits; flag non-5-digit values.
             col_values = []
             invalid_idx = []
             for idx, v in df[col].items():
@@ -643,6 +650,7 @@ def normalize_dataframe(
             df[col] = col_values
 
     if "Move In Date" in df.columns and "Paid Date" in df.columns:
+        # Fill missing Move In Date with Paid Date when available.
         missing_move_in_mask = df["Move In Date"].apply(_is_missing)
         paid_present_mask = ~df["Paid Date"].apply(_is_missing)
         df.loc[missing_move_in_mask & paid_present_mask, "Move In Date"] = df.loc[
@@ -650,6 +658,7 @@ def normalize_dataframe(
         ]
 
     if "First Name" in df.columns and "Last Name" in df.columns:
+        # Derive Status from presence of occupant name.
         df["Status"] = df.apply(
             lambda row: "Occupied"
             if (pd.notna(row["First Name"]) and str(row["First Name"]).strip() != "")
@@ -676,6 +685,7 @@ def normalize_dataframe(
             df["Paid Through Date"] = df.apply(_calc_paid_through, axis=1)
             
     if "Status" in df.columns:
+        # Highlight occupied rows missing required paid dates.
         occupied_mask = df["Status"].eq("Occupied")
 
         for paid_col in ("Paid Through Date", "Paid Date"):
@@ -715,10 +725,12 @@ def normalize_dataframe(
         raise RuntimeError("Failed to generate a unique access code.")
 
     if "Access Code" not in df.columns:
+        # Ensure Access Code column exists for derivation.
         df["Access Code"] = None
 
     used_access_codes: set[str] = set()
     if "Access Code" in df.columns:
+        # Track existing access codes to avoid duplicates.
         for val in df["Access Code"]:
             digits = _extract_digits(val)
             last4 = _last4(digits)
@@ -726,6 +738,7 @@ def normalize_dataframe(
                 used_access_codes.add(last4)
 
     if "Access Code" in df.columns:
+        # Populate missing access codes for occupied units (phone last4 or unique random).
         access_code_rows: List[int] = []
         for idx in df.index:
             # Only derive/populate for occupied units.
@@ -758,6 +771,7 @@ def normalize_dataframe(
 
 
     if "Width" in df.columns and "Length" in df.columns:
+        # Default missing dimensions for occupied units, then compute Space Size.
         occupied_mask = (
             df["Status"].eq("Occupied") if "Status" in df.columns else pd.Series(False, index=df.index)
         )
@@ -777,9 +791,11 @@ def normalize_dataframe(
 
 
     if "State" in df.columns and "Country" in df.columns:
+        # Set Country to United States when State is a valid US abbreviation.
         df.loc[df["State"].apply(lambda x: is_valid_state_abbrev(x) if pd.notna(x) else False), "Country"] = "United States"
     
     if "Width" in df.columns and "Length" in df.columns:
+        # Compute Sq. Ft. as Width * Length when both are present.
         df["Sq. Ft."] = df.apply(
             lambda row: row["Width"] * row["Length"]
             if pd.notna(row["Width"]) and pd.notna(row["Length"])
@@ -787,6 +803,7 @@ def normalize_dataframe(
             axis=1,
         )
     if "Paid Through Date" in df.columns:
+        # Derive Bill Day from Paid Through Date.
         df["Bill Day"] = df["Paid Through Date"].apply(compute_bill_day)
 
     return df, invalid_cells, highlight_cells, invalid_reasons
