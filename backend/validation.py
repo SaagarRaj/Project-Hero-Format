@@ -222,6 +222,62 @@ def is_valid_state_abbrev(val):
 
 
 # ---------------------------------------------------------------------------
+# Name normalization
+# ---------------------------------------------------------------------------
+
+_NAME_ALLOWED_PATTERN = re.compile(r"^[A-Za-z\s,'-]+$")
+_NAME_TOKEN_PATTERN = re.compile(r"^[A-Za-z]+(?:[\'-][A-Za-z]+)*$")
+
+
+def normalize_name_fields(value: object) -> Dict[str, object]:
+    """
+    Normalize combined name strings into first/middle/last.
+    Returns: {"first_name": str|None, "middle_name": str|None, "last_name": str|None, "is_valid": bool}
+    """
+    if pd.isna(value):
+        return {"first_name": None, "middle_name": None, "last_name": None, "is_valid": True}
+
+    raw = str(value).strip()
+    if raw == "":
+        return {"first_name": None, "middle_name": None, "last_name": None, "is_valid": True}
+
+    if not _NAME_ALLOWED_PATTERN.fullmatch(raw):
+        return {"first_name": None, "middle_name": None, "last_name": None, "is_valid": False}
+
+    if "," in raw:
+        parts = [p.strip() for p in raw.split(",", 1)]
+        if len(parts) != 2 or not parts[0] or not parts[1]:
+            return {"first_name": None, "middle_name": None, "last_name": None, "is_valid": False}
+        last = parts[0]
+        first_and_middle = parts[1].split()
+        if not first_and_middle:
+            return {"first_name": None, "middle_name": None, "last_name": None, "is_valid": False}
+        if not _NAME_TOKEN_PATTERN.fullmatch(last):
+            return {"first_name": None, "middle_name": None, "last_name": None, "is_valid": False}
+        for token in first_and_middle:
+            if not _NAME_TOKEN_PATTERN.fullmatch(token):
+                return {"first_name": None, "middle_name": None, "last_name": None, "is_valid": False}
+        first = first_and_middle[0]
+        middle = " ".join(first_and_middle[1:]) if len(first_and_middle) > 1 else None
+        return {"first_name": first, "middle_name": middle, "last_name": last, "is_valid": True}
+
+    tokens = raw.split()
+    if len(tokens) == 1:
+        if not _NAME_TOKEN_PATTERN.fullmatch(tokens[0]):
+            return {"first_name": None, "middle_name": None, "last_name": None, "is_valid": False}
+        return {"first_name": tokens[0], "middle_name": None, "last_name": None, "is_valid": True}
+
+    for token in tokens:
+        if not _NAME_TOKEN_PATTERN.fullmatch(token):
+            return {"first_name": None, "middle_name": None, "last_name": None, "is_valid": False}
+
+    first = tokens[0]
+    last = tokens[-1]
+    middle = " ".join(tokens[1:-1]) if len(tokens) > 2 else None
+    return {"first_name": first, "middle_name": middle, "last_name": last, "is_valid": True}
+
+
+# ---------------------------------------------------------------------------
 # Mapping-driven defaults
 # ---------------------------------------------------------------------------
 
@@ -499,7 +555,34 @@ def normalize_dataframe(
         )
 
     for col in df.columns:
-        if col in PHONE_COLS:
+        if col == "First Name":
+            # Split combined name formats; flag invalid name strings.
+            col_values = []
+            invalid_idx = []
+            if "Middle Name" not in df.columns:
+                df["Middle Name"] = None
+            if "Last Name" not in df.columns:
+                df["Last Name"] = None
+            for idx, v in df[col].items():
+                if pd.isna(v) or str(v).strip() == "":
+                    col_values.append(None)
+                    continue
+                normalized = normalize_name_fields(v)
+                if normalized["is_valid"]:
+                    col_values.append(normalized["first_name"])
+                    if normalized["middle_name"] and _is_missing(df.at[idx, "Middle Name"]):
+                        df.at[idx, "Middle Name"] = normalized["middle_name"]
+                    if normalized["last_name"] and _is_missing(df.at[idx, "Last Name"]):
+                        df.at[idx, "Last Name"] = normalized["last_name"]
+                else:
+                    col_values.append(v)
+                    invalid_idx.append(idx)
+                    add_invalid_reason(idx, col, v, "Invalid name format")
+            if invalid_idx:
+                invalid_cells[col] = invalid_idx
+            df[col] = col_values
+
+        elif col in PHONE_COLS:
             # Validate and normalize phone numbers; flag invalid formats.
             col_values = []
             invalid_idx = []
