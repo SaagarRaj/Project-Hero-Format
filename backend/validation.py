@@ -397,6 +397,69 @@ def parse_space_category(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
+# Space Size parsing (from user-entered strings)
+# ---------------------------------------------------------------------------
+
+SPACE_SIZE_PATTERN = re.compile(
+    r"^\s*(\d+(?:\.\d+)?)\s*[xX]\s*(\d+(?:\.\d+)?)\b.*$"
+)
+
+
+def parse_space_size(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Parse 'Space Size' values like '3 X 4 H&C' and normalize:
+    - Extract Width/Length if missing
+    - Rewrite Space Size as '[Width x Length]'
+    """
+    if "Space Size" not in df.columns:
+        return df
+
+    df = df.copy()
+    if "Width" not in df.columns:
+        df["Width"] = None
+    if "Length" not in df.columns:
+        df["Length"] = None
+
+    if "_space_size_parsed" not in df.columns:
+        df["_space_size_parsed"] = False
+
+    for idx, raw in df["Space Size"].items():
+        if _is_missing(raw):
+            continue
+        if not (_is_missing(df.at[idx, "Width"]) and _is_missing(df.at[idx, "Length"])):
+            continue
+        match = SPACE_SIZE_PATTERN.match(str(raw))
+        if not match:
+            continue
+        width_val, length_val = match.groups()
+        if _is_missing(df.at[idx, "Width"]):
+            try:
+                df.at[idx, "Width"] = float(width_val)
+            except Exception:
+                df.at[idx, "Width"] = width_val
+        if _is_missing(df.at[idx, "Length"]):
+            try:
+                df.at[idx, "Length"] = float(length_val)
+            except Exception:
+                df.at[idx, "Length"] = length_val
+
+        # Normalize Space Size format based on parsed values.
+        def _fmt(val):
+            try:
+                num = float(val)
+                if num.is_integer():
+                    return str(int(num))
+                return str(num).rstrip("0").rstrip(".")
+            except Exception:
+                return str(val)
+
+        df.at[idx, "Space Size"] = f"[{_fmt(df.at[idx, 'Width'])} x {_fmt(df.at[idx, 'Length'])}]"
+        df.at[idx, "_space_size_parsed"] = True
+
+    return df
+
+
+# ---------------------------------------------------------------------------
 # Column classification
 # ---------------------------------------------------------------------------
 
@@ -540,6 +603,7 @@ def normalize_dataframe(
     """
     df = apply_default_values_from_mapping(df, mapping_path)
     df = parse_space_category(df)
+    df = parse_space_size(df)
     df = df.copy()
     invalid_cells: Dict[str, List[int]] = {}
     highlight_cells: Dict[str, Dict[str, List[int]]] = {"red": {}, "blue": {}}
@@ -636,6 +700,11 @@ def normalize_dataframe(
                 if pd.isna(v) or str(v).strip() == "":
                     col_values.append(None)
                     continue
+                if col in {"Width", "Length"} and "_space_size_parsed" in df.columns:
+                    if bool(df.at[idx, "_space_size_parsed"]):
+                        if isinstance(v, (int, float)):
+                            col_values.append(v)
+                            continue
                 cleaned = clean_number(v)
                 if cleaned is not None:
                     col_values.append(cleaned)
@@ -865,15 +934,29 @@ def normalize_dataframe(
         occupied_mask = (
             df["Status"].eq("Occupied") if "Status" in df.columns else pd.Series(False, index=df.index)
         )
-        width_missing_mask = df["Width"].apply(_is_missing) & occupied_mask
-        length_missing_mask = df["Length"].apply(_is_missing) & occupied_mask
+        space_size_missing_mask = (
+            df["Space Size"].apply(_is_missing) if "Space Size" in df.columns else pd.Series(True, index=df.index)
+        )
+        width_missing_mask = df["Width"].apply(_is_missing) & occupied_mask & space_size_missing_mask
+        length_missing_mask = df["Length"].apply(_is_missing) & occupied_mask & space_size_missing_mask
         if width_missing_mask.any():
             df.loc[width_missing_mask, "Width"] = 1
         if length_missing_mask.any():
             df.loc[length_missing_mask, "Length"] = 1
 
         df["Space Size"] = df.apply(compute_space_size, axis=1)
-        default_applied_mask = (width_missing_mask | length_missing_mask) & df["Space Size"].notna()
+        space_size_parsed_mask = (
+            df["_space_size_parsed"] if "_space_size_parsed" in df.columns else pd.Series(False, index=df.index)
+        )
+        width_num = pd.to_numeric(df["Width"], errors="coerce")
+        length_num = pd.to_numeric(df["Length"], errors="coerce")
+        width_length_gt_one = (width_num > 1) & (length_num > 1)
+        default_applied_mask = (
+            (width_missing_mask | length_missing_mask)
+            & df["Space Size"].notna()
+            & ~space_size_parsed_mask
+            & ~width_length_gt_one
+        )
         space_size_rows = [idx for idx, applied in default_applied_mask.items() if applied]
         if space_size_rows:
             highlight_cells["red"]["Space Size"] = space_size_rows
@@ -895,5 +978,8 @@ def normalize_dataframe(
     if "Paid Through Date" in df.columns:
         # Derive Bill Day from Paid Through Date.
         df["Bill Day"] = df["Paid Through Date"].apply(compute_bill_day)
+
+    if "_space_size_parsed" in df.columns:
+        df = df.drop(columns=["_space_size_parsed"])
 
     return df, invalid_cells, highlight_cells, invalid_reasons
