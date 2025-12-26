@@ -227,6 +227,10 @@ def is_valid_state_abbrev(val):
 
 _NAME_ALLOWED_PATTERN = re.compile(r"^[A-Za-z\s,'-]+$")
 _NAME_TOKEN_PATTERN = re.compile(r"^[A-Za-z]+(?:[\'-][A-Za-z]+)*$")
+_NAME_COMPANY_PATTERN = re.compile(
+    r"\b(c\/o|care of|company|co|inc|inc\.|llc|l\.l\.c\.|corp|corp\.|ltd|ltd\.)\b",
+    re.IGNORECASE,
+)
 
 
 def normalize_name_fields(value: object) -> Dict[str, object]:
@@ -242,6 +246,9 @@ def normalize_name_fields(value: object) -> Dict[str, object]:
         return {"first_name": None, "middle_name": None, "last_name": None, "is_valid": True}
 
     if not _NAME_ALLOWED_PATTERN.fullmatch(raw):
+        return {"first_name": None, "middle_name": None, "last_name": None, "is_valid": False}
+
+    if _NAME_COMPANY_PATTERN.search(raw):
         return {"first_name": None, "middle_name": None, "last_name": None, "is_valid": False}
 
     if "," in raw:
