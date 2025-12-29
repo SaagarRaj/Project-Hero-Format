@@ -401,14 +401,14 @@ def parse_space_category(df: pd.DataFrame) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 SPACE_SIZE_PATTERN = re.compile(
-    r"^\s*(\d+(?:\.\d+)?)\s*[xX]\s*(\d+(?:\.\d+)?)\b.*$"
+    r"^\s*(\d+(?:\.\d+)?)\s*[xX]\s*(\d+(?:\.\d+)?)(?:\s*[xX]\s*(\d+(?:\.\d+)?))?(?:\s*[A-Za-z].*)?$"
 )
 
 
 def parse_space_size(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Parse 'Space Size' values like '3 X 4 H&C' and normalize:
-    - Extract Width/Length if missing
+    Parse 'Space Size' values like '3 X 4 H&C', '8 X 7 X 6', or '10X30DU' and normalize:
+    - Extract Width/Length (and Height when provided) if missing
     - Rewrite Space Size as '[Width x Length]'
     """
     if "Space Size" not in df.columns:
@@ -431,7 +431,7 @@ def parse_space_size(df: pd.DataFrame) -> pd.DataFrame:
         match = SPACE_SIZE_PATTERN.match(str(raw))
         if not match:
             continue
-        width_val, length_val = match.groups()
+        width_val, length_val, height_val = match.groups()
         if _is_missing(df.at[idx, "Width"]):
             try:
                 df.at[idx, "Width"] = float(width_val)
@@ -442,6 +442,14 @@ def parse_space_size(df: pd.DataFrame) -> pd.DataFrame:
                 df.at[idx, "Length"] = float(length_val)
             except Exception:
                 df.at[idx, "Length"] = length_val
+        if height_val is not None:
+            if "Height" not in df.columns:
+                df["Height"] = None
+            if _is_missing(df.at[idx, "Height"]):
+                try:
+                    df.at[idx, "Height"] = float(height_val)
+                except Exception:
+                    df.at[idx, "Height"] = height_val
 
         # Normalize Space Size format based on parsed values.
         def _fmt(val):
@@ -455,6 +463,51 @@ def parse_space_size(df: pd.DataFrame) -> pd.DataFrame:
 
         df.at[idx, "Space Size"] = f"[{_fmt(df.at[idx, 'Width'])} x {_fmt(df.at[idx, 'Length'])}]"
         df.at[idx, "_space_size_parsed"] = True
+
+    return df
+
+
+# ---------------------------------------------------------------------------
+# Space Type parsing (dimensions embedded in type strings)
+# ---------------------------------------------------------------------------
+
+SPACE_TYPE_DIMENSION_PATTERN = re.compile(
+    r"^\s*(\d+(?:\.\d+)?)\s*[xX]\s*(\d+(?:\.\d+)?)(?:\s*[A-Za-z].*)?$"
+)
+
+
+def parse_space_type_dimensions(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Parse 'Space Type' values like '10X30DU' to fill Width/Length if missing.
+    """
+    if "Space Type" not in df.columns:
+        return df
+
+    df = df.copy()
+    if "Width" not in df.columns:
+        df["Width"] = None
+    if "Length" not in df.columns:
+        df["Length"] = None
+
+    for idx, raw in df["Space Type"].items():
+        if _is_missing(raw):
+            continue
+        if not (_is_missing(df.at[idx, "Width"]) and _is_missing(df.at[idx, "Length"])):
+            continue
+        match = SPACE_TYPE_DIMENSION_PATTERN.match(str(raw))
+        if not match:
+            continue
+        width_val, length_val = match.groups()
+        if _is_missing(df.at[idx, "Width"]):
+            try:
+                df.at[idx, "Width"] = float(width_val)
+            except Exception:
+                df.at[idx, "Width"] = width_val
+        if _is_missing(df.at[idx, "Length"]):
+            try:
+                df.at[idx, "Length"] = float(length_val)
+            except Exception:
+                df.at[idx, "Length"] = length_val
 
     return df
 
@@ -604,6 +657,7 @@ def normalize_dataframe(
     df = apply_default_values_from_mapping(df, mapping_path)
     df = parse_space_category(df)
     df = parse_space_size(df)
+    df = parse_space_type_dimensions(df)
     df = df.copy()
     invalid_cells: Dict[str, List[int]] = {}
     highlight_cells: Dict[str, Dict[str, List[int]]] = {"red": {}, "blue": {}}
