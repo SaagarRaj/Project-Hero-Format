@@ -103,10 +103,15 @@ def clean_date(val):
 
 
 def clean_boolean(val):
-    """Normalize boolean-like fields."""
+    """Normalize boolean-like fields; leave blank when not explicitly truthy/falsy."""
     if pd.isna(val):
+        return None
+    normalized = str(val).strip().lower()
+    if normalized in {"y", "yes", "true", "1"}:
+        return True
+    if normalized in {"n", "no", "false", "0"}:
         return False
-    return str(val).strip().lower() in {"y", "yes", "true", "1"}
+    return None
 
 
 EMAIL_PATTERN = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
@@ -790,8 +795,8 @@ def normalize_dataframe(
             df[col] = col_values
 
         
-        # elif col in BOOLEAN_COLS:
-        #     df[col] = df[col].apply(clean_boolean)
+        elif col in BOOLEAN_COLS:
+            df[col] = df[col].apply(clean_boolean)
 
         elif col in EMAIL_COLS:
             # Lowercase and validate emails; flag invalid addresses.
@@ -879,6 +884,47 @@ def normalize_dataframe(
             else "Vacant",
             axis=1,
         )
+
+    if "Status" in df.columns and "Space" in df.columns:
+        # Drop rows that are Vacant with no Space and no occupant name.
+        no_name_mask = (
+            df["First Name"].apply(_is_missing) if "First Name" in df.columns else pd.Series(True, index=df.index)
+        ) & (
+            df["Last Name"].apply(_is_missing) if "Last Name" in df.columns else pd.Series(True, index=df.index)
+        )
+        drop_mask = df["Status"].eq("Vacant") & df["Space"].apply(_is_missing) & no_name_mask
+        if drop_mask.any():
+            keep_index = df.index[~drop_mask]
+            index_map = {old_idx: new_idx for new_idx, old_idx in enumerate(keep_index)}
+            df = df.loc[keep_index].reset_index(drop=True)
+
+            # Remap validation indices to the new row positions.
+            remapped_invalid = {}
+            for col, idx_list in invalid_cells.items():
+                new_idx = [index_map[i] for i in idx_list if i in index_map]
+                if new_idx:
+                    remapped_invalid[col] = new_idx
+            invalid_cells = remapped_invalid
+
+            remapped_highlight = {"red": {}, "blue": {}}
+            for color, col_map in highlight_cells.items():
+                remapped_cols = {}
+                for col, idx_list in col_map.items():
+                    new_idx = [index_map[i] for i in idx_list if i in index_map]
+                    if new_idx:
+                        remapped_cols[col] = new_idx
+                if remapped_cols:
+                    remapped_highlight[color] = remapped_cols
+            highlight_cells = remapped_highlight
+
+            remapped_reasons = []
+            for reason in invalid_reasons:
+                old_idx = reason.get("row_index")
+                if old_idx in index_map:
+                    updated = dict(reason)
+                    updated["row_index"] = index_map[old_idx]
+                    remapped_reasons.append(updated)
+            invalid_reasons = remapped_reasons
 
     
     if "Status" in df.columns:
