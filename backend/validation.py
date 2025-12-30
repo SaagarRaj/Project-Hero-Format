@@ -885,14 +885,18 @@ def normalize_dataframe(
             axis=1,
         )
 
-    if "Status" in df.columns and "Space" in df.columns:
-        # Drop rows that are Vacant with no Space and no occupant name.
-        no_name_mask = (
-            df["First Name"].apply(_is_missing) if "First Name" in df.columns else pd.Series(True, index=df.index)
-        ) & (
-            df["Last Name"].apply(_is_missing) if "Last Name" in df.columns else pd.Series(True, index=df.index)
+    if "Status" in df.columns:
+        # Drop rows that are Vacant and missing Space or missing First/Last Name.
+        space_missing = (
+            df["Space"].apply(_is_missing) if "Space" in df.columns else pd.Series(False, index=df.index)
         )
-        drop_mask = df["Status"].eq("Vacant") & df["Space"].apply(_is_missing) & no_name_mask
+        first_missing = (
+            df["First Name"].apply(_is_missing) if "First Name" in df.columns else pd.Series(False, index=df.index)
+        )
+        last_missing = (
+            df["Last Name"].apply(_is_missing) if "Last Name" in df.columns else pd.Series(False, index=df.index)
+        )
+        drop_mask = df["Status"].eq("Vacant") & (space_missing | first_missing | last_missing)
         if drop_mask.any():
             keep_index = df.index[~drop_mask]
             index_map = {old_idx: new_idx for new_idx, old_idx in enumerate(keep_index)}

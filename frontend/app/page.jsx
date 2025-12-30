@@ -80,17 +80,24 @@ export default function Page() {
   };
 
   return (
-    <div className="page-shell">
+    <div className="flex min-h-screen items-center justify-center px-4 py-12">
       <Card>
-        <h1>Excel Normalizer</h1>
-        <p>
-          Upload your mapping, optional template, and data files to produce a
-          standardized Excel output.
-        </p>
+        <div className="mb-6">
+          <div className="inline-flex items-center gap-2 rounded-full border border-emerald-100 bg-emerald-50 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-emerald-700">
+            Hero-Format Output
+          </div>
+          <h1 className="mt-4 text-3xl font-semibold tracking-tight text-slate-900 md:text-4xl">
+            Excel Mapping Tool
+          </h1>
+          <p className="mt-3 text-sm text-slate-600 md:text-base">
+            Upload mapping, optional template, and input files to generate a
+            standardized Hero-ready output.
+          </p>
+        </div>
         <form onSubmit={handleSubmit}>
-          <div className="section">
+          <div className="mb-5">
             <Label htmlFor="mapping">
-              Mapping file <span className="required">*</span>
+              Mapping file <span className="text-rose-600">*</span>
             </Label>
             <Input
               id="mapping"
@@ -100,11 +107,11 @@ export default function Page() {
             />
           </div>
 
-          <div className="split-fields">
-            <div className="section">
+          <div className="grid gap-5 md:grid-cols-2">
+            <div>
               <Label htmlFor="data">
                 Input files (CSV or Excel, one or more){" "}
-                <span className="required">*</span>
+                <span className="text-rose-600">*</span>
               </Label>
               <Input
                 id="data"
@@ -113,11 +120,11 @@ export default function Page() {
                 accept=".csv,.xlsx,.xls"
                 onChange={(e) => setDataFiles(e.target.files ?? [])}
               />
-              <div className="files-hint">
+              <div className="mt-2 text-xs text-slate-500">
                 We will merge and normalize all provided files.
               </div>
             </div>
-            <div className="section">
+            <div>
               <Label htmlFor="template">Template file (optional)</Label>
               <Input
                 id="template"
@@ -128,24 +135,24 @@ export default function Page() {
             </div>
           </div>
 
-          <div className="split-fields">
-            <div className="section">
+          <div className="mt-5 grid gap-5 md:grid-cols-2">
+            <div>
               <Label htmlFor="data">
-                Owner name <span className="required">*</span>
+                Owner name <span className="text-rose-600">*</span>
               </Label>
               <Input
                 id="data"
                 type="text"
                 onChange={(e) => setOwnerName(e.target.value)}
               />
-              <div className="files-hint">
+              <div className="mt-2 text-xs text-slate-500">
                 We will merge and normalize Owner name in the final output file.
               </div>
             </div>
 
-            <div className="section">
+            <div>
               <Label htmlFor="migration-date">
-                Date of Migration <span className="required">*</span>
+                Date of Migration <span className="text-rose-600">*</span>
               </Label>
               <Input
                 id="migration-date"
@@ -155,11 +162,20 @@ export default function Page() {
             </div>
           </div>
 
-          <Button type="submit" disabled={isSubmitting}>
-            {isSubmitting ? "Processing..." : "Process Files"}
-          </Button>
+          <div className="mt-6 flex flex-wrap items-center gap-3">
+            <Button type="submit" disabled={isSubmitting}>
+              {isSubmitting ? "Processing..." : "Process Files"}
+            </Button>
+            <span className="text-xs text-slate-500">
+              Output will download automatically.
+            </span>
+          </div>
         </form>
-        {status && <div className="status">{status}</div>}
+        {status && (
+          <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+            {status}
+          </div>
+        )}
       </Card>
     </div>
   );
