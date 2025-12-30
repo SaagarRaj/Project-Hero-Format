@@ -7,7 +7,9 @@ import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 
 export default function Page() {
+  const [selectedMappingType, setSelectedMappingType] = useState("");
   const [mappingFile, setMappingFile] = useState(null);
+  const [mappingFileSource, setMappingFileSource] = useState("");
   const [templateFile, setTemplateFile] = useState(null);
   const [dataFiles, setDataFiles] = useState([]);
   const [status, setStatus] = useState("");
@@ -18,12 +20,63 @@ export default function Page() {
   const backendUrl =
     process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
 
+  const templateDownloadMap = {
+    ESS: "/MappingTemplate/ESS/ess_mapping.xlsx",
+    SSM: "/MappingTemplate/SSM/ssm_mapping.xlsx",
+    StorEdge: "/MappingTemplate/StorEdge/storEdge_mapping.xlsx",
+    SiteLink: "/MappingTemplate/SiteLink/siteLink_mapping.xlsx",
+    Storage_Commander: "/MappingTemplate/storageCommander_mapping.xlsx",
+    CUSTOM: "/MappingTemplate/General/mapping_template.xlsx",
+  };
+
+  const handlePmsChange = (value) => {
+    if (!value) {
+      setSelectedMappingType("");
+      setMappingFileSource("");
+      setMappingFile(null);
+      return;
+    }
+    setSelectedMappingType(value);
+    setMappingFileSource("PREDEFINED");
+    setMappingFile(null);
+  };
+
+  const handleCustomToggle = (checked) => {
+    if (checked) {
+      setSelectedMappingType("CUSTOM");
+      setMappingFileSource("UPLOADED");
+      setMappingFile(null);
+    } else {
+      setSelectedMappingType("");
+      setMappingFileSource("");
+      setMappingFile(null);
+    }
+  };
+
+  const resolvePredefinedMapping = async (type) => {
+    const mappingPath = templateDownloadMap[type];
+    const response = await fetch(mappingPath);
+    if (!response.ok) {
+      throw new Error("Failed to load predefined mapping template.");
+    }
+    const blob = await response.blob();
+    return new File([blob], mappingPath.split("/").pop() || "mapping.xlsx", {
+      type:
+        blob.type ||
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    });
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setStatus("");
 
-    if (!mappingFile) {
-      setStatus("Please upload a mapping file.");
+    if (!selectedMappingType) {
+      setStatus("Please select a mapping option.");
+      return;
+    }
+    if (selectedMappingType === "CUSTOM" && !mappingFile) {
+      setStatus("Please upload a custom mapping file.");
       return;
     }
     if (!dataFiles || dataFiles.length === 0) {
@@ -40,7 +93,13 @@ export default function Page() {
     }
 
     const formData = new FormData();
-    formData.append("mapping", mappingFile);
+    let mappingToSend = mappingFile;
+    if (selectedMappingType !== "CUSTOM") {
+      mappingToSend = await resolvePredefinedMapping(selectedMappingType);
+    }
+    formData.append("mapping", mappingToSend);
+    formData.append("mappingType", selectedMappingType);
+    formData.append("mappingFileSource", mappingFileSource);
     if (templateFile) {
       formData.append("template", templateFile);
     }
@@ -95,16 +154,80 @@ export default function Page() {
           </p>
         </div>
         <form onSubmit={handleSubmit}>
-          <div className="mb-5">
-            <Label htmlFor="mapping">
-              Mapping file <span className="text-rose-600">*</span>
-            </Label>
-            <Input
-              id="mapping"
-              type="file"
-              accept=".xlsx,.xls"
-              onChange={(e) => setMappingFile(e.target.files?.[0] ?? null)}
-            />
+          <div className="mb-6 rounded-2xl border border-amber-100 bg-amber-50/50 p-5">
+            <h2 className="text-base font-semibold text-slate-900">
+              Select Mapping File <span className="text-rose-600">*</span>
+            </h2>
+            <p className="mt-1 text-xs text-slate-600">
+              Choose a predefined PMS mapping or upload a custom mapping file.
+            </p>
+
+            <div className="mt-4 grid gap-3 md:grid-cols-[1fr_auto] md:items-end">
+              <div className="space-y-2">
+                <Label className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                  Predefined PMS Mapping
+                </Label>
+                <select
+                  className="w-full rounded-xl border border-slate-300/80 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm transition focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-200"
+                  value={
+                    selectedMappingType !== "CUSTOM" ? selectedMappingType : ""
+                  }
+                  onChange={(e) => handlePmsChange(e.target.value)}
+                  disabled={selectedMappingType === "CUSTOM"}
+                >
+                  <option value="">Select Property Management System</option>
+                  <option value="ESS">ESS</option>
+                  <option value="SSM">SSM</option>
+                  <option value="StorEdge">StorEdge</option>
+                  <option value="SiteLink">SiteLink</option>
+                  <option value="Storage_Commander">Storage Commander</option>
+                </select>
+              </div>
+              {selectedMappingType !== "CUSTOM" && selectedMappingType && (
+                <a
+                  className="inline-flex items-center justify-center rounded-lg border border-emerald-200 bg-white px-3 py-2 text-xs font-semibold text-emerald-700 transition hover:border-emerald-400"
+                  href={templateDownloadMap[selectedMappingType]}
+                  download
+                >
+                  Download Mapping Template
+                </a>
+              )}
+            </div>
+
+            <div className="mt-4 rounded-xl border border-slate-200 bg-white/70 px-4 py-3">
+              <label className="flex items-center gap-3 text-sm font-medium text-slate-800">
+                <input
+                  type="checkbox"
+                  checked={selectedMappingType === "CUSTOM"}
+                  onChange={(e) => handleCustomToggle(e.target.checked)}
+                  className="h-4 w-4 text-emerald-500"
+                />
+                Custom Mapping File
+              </label>
+
+              {selectedMappingType === "CUSTOM" && (
+                <div className="mt-3 flex flex-wrap items-center gap-3">
+                  <a
+                    className="inline-flex items-center justify-center rounded-lg border border-emerald-200 bg-white px-3 py-1.5 text-xs font-semibold text-emerald-700 transition hover:border-emerald-400"
+                    href={templateDownloadMap.CUSTOM}
+                    download
+                  >
+                    Download Mapping Template
+                  </a>
+                  <div className="min-w-[220px] flex-1">
+                    <Input
+                      id="mapping"
+                      type="file"
+                      accept=".xlsx,.xls"
+                      onChange={(e) =>
+                        setMappingFile(e.target.files?.[0] ?? null)
+                      }
+                      className="bg-white"
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
 
           <div className="grid gap-5 md:grid-cols-2">
@@ -163,7 +286,14 @@ export default function Page() {
           </div>
 
           <div className="mt-6 flex flex-wrap items-center gap-3">
-            <Button type="submit" disabled={isSubmitting}>
+            <Button
+              type="submit"
+              disabled={
+                isSubmitting ||
+                !selectedMappingType ||
+                (selectedMappingType === "CUSTOM" && !mappingFile)
+              }
+            >
               {isSubmitting ? "Processing..." : "Process Files"}
             </Button>
             <span className="text-xs text-slate-500">
