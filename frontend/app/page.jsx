@@ -148,9 +148,9 @@ export default function Page() {
           <h1 className="mt-4 text-3xl font-semibold tracking-tight text-slate-900 md:text-4xl">
             Excel Mapping Tool
           </h1>
-          <p className="mt-3 text-sm text-slate-600 md:text-base">
+          <p className="mt-3 text-xs text-slate-600 md:text-sm">
             Upload mapping, optional template, and input files to generate a
-            standardized Hero-ready output.
+            standardized Hero-Format ready output.
           </p>
         </div>
         <form onSubmit={handleSubmit}>
@@ -261,7 +261,7 @@ export default function Page() {
           <div className="mt-5 grid gap-5 md:grid-cols-2">
             <div>
               <Label htmlFor="data">
-                Owner name <span className="text-rose-600">*</span>
+                Property name <span className="text-rose-600">*</span>
               </Label>
               <Input
                 id="data"
