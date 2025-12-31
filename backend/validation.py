@@ -959,7 +959,7 @@ def normalize_dataframe(
         )
 
     if "Status" in df.columns:
-        # Drop rows that are Vacant and missing Space or missing First/Last Name.
+        # Drop rows that are Vacant and missing Space.
         space_missing = (
             df["Space"].apply(_is_missing) if "Space" in df.columns else pd.Series(False, index=df.index)
         )
@@ -969,7 +969,7 @@ def normalize_dataframe(
         last_missing = (
             df["Last Name"].apply(_is_missing) if "Last Name" in df.columns else pd.Series(False, index=df.index)
         )
-        drop_mask = df["Status"].eq("Vacant") & (space_missing | first_missing | last_missing)
+        drop_mask = df["Status"].eq("Vacant") & space_missing
         if drop_mask.any():
             keep_index = df.index[~drop_mask]
             index_map = {old_idx: new_idx for new_idx, old_idx in enumerate(keep_index)}
