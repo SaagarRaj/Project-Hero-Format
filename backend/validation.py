@@ -11,6 +11,10 @@ from decimal import Decimal, ROUND_HALF_UP
 import random
 from typing import Dict, List, Tuple
 import pandas as pd # type: ignore
+try:
+    import usaddress
+except Exception:  # pragma: no cover - optional dependency
+    usaddress = None
 
 # ---------------------------------------------------------------------------
 # Cleaning helpers
@@ -146,6 +150,43 @@ def clean_zip(val):
     if re.fullmatch(r"\d{5}", s):
         return int(s)
     return val
+
+
+def normalize_zip_from_usaddress(val: str) -> str | None:
+    if not val:
+        return None
+    match = re.search(r"\d{5}", val)
+    return match.group(0) if match else None
+
+
+def parse_full_us_address(raw: str) -> Dict[str, str] | None:
+    if not raw or usaddress is None:
+        return None
+    try:
+        tagged, _ = usaddress.tag(raw)
+    except Exception:
+        return None
+    city = tagged.get("PlaceName")
+    state = tagged.get("StateName")
+    zip_code = tagged.get("ZipCode")
+    if not (city and state and zip_code):
+        return None
+    try:
+        parts = usaddress.parse(raw)
+    except Exception:
+        return None
+    street_tokens = [token for token, label in parts if label not in {"PlaceName", "StateName", "ZipCode"}]
+    street = " ".join(street_tokens).strip()
+    street = re.sub(r"\s+,", ",", street)
+    street = re.sub(r"\s{2,}", " ", street).strip().strip(",")
+    if not street:
+        return None
+    return {
+        "street": street,
+        "city": city.strip(),
+        "state": state.strip(),
+        "zip": zip_code.strip(),
+    }
 
 
 US_STATES_MAP = {
@@ -406,7 +447,7 @@ def parse_space_category(df: pd.DataFrame) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 SPACE_SIZE_PATTERN = re.compile(
-    r"^\s*(\d+(?:\.\d+)?)\s*[xX]\s*(\d+(?:\.\d+)?)(?:\s*[xX]\s*(\d+(?:\.\d+)?))?(?:\s*[A-Za-z].*)?$"
+    r"^\s*(\d+(?:\.\d+)?)\s*[xX]\s*(\d+(?:\.\d+)?)(?:\s*[xX]\s*(\d+(?:\.\d+)?))?(?:\s*[^0-9].*)?$"
 )
 
 
@@ -612,6 +653,15 @@ STATE_COLS = {
 }
 
 ZIP_COLS = {"ZIP" , "Alt ZIP"}
+ADDRESS_COLS = {
+    "Address",
+    "Street Address",
+    "Street",
+    "Mailing Address",
+    "Address Line 1",
+    "Address1",
+    "Alt Address",
+}
 # ---------------------------------------------------------------------------
 # Derived column logic
 # ---------------------------------------------------------------------------
@@ -667,6 +717,29 @@ def normalize_dataframe(
     invalid_cells: Dict[str, List[int]] = {}
     highlight_cells: Dict[str, Dict[str, List[int]]] = {"red": {}, "blue": {}}
     invalid_reasons: List[Dict[str, object]] = []
+    address_cols = [col for col in df.columns if col in ADDRESS_COLS]
+    if address_cols:
+        if "City" not in df.columns:
+            df["City"] = None
+        if "State" not in df.columns:
+            df["State"] = None
+        if "ZIP" not in df.columns:
+            df["ZIP"] = None
+        for col in address_cols:
+            for idx, v in df[col].items():
+                if _is_missing(v):
+                    continue
+                parsed = parse_full_us_address(str(v).strip())
+                if not parsed:
+                    continue
+                if _is_missing(df.at[idx, "City"]):
+                    df.at[idx, "City"] = parsed["city"]
+                if _is_missing(df.at[idx, "State"]):
+                    df.at[idx, "State"] = parsed["state"]
+                if _is_missing(df.at[idx, "ZIP"]):
+                    zip_clean = normalize_zip_from_usaddress(parsed["zip"])
+                    df.at[idx, "ZIP"] = zip_clean if zip_clean else parsed["zip"]
+                df.at[idx, col] = parsed["street"]
 
     def _get_space_value(idx: int) -> object:
         if "Space" in df.columns:
@@ -947,6 +1020,22 @@ def normalize_dataframe(
 
             df["Paid Through Date"] = df.apply(_calc_paid_through, axis=1)
             
+    if "Status" in df.columns:
+        if "Paid Date" in df.columns and "Paid Through Date" in df.columns:
+            # Paid date = paid through date - 1 month + 1 day
+            def _calc_paid_date(row):
+                if row.get("Status") != "Occupied":
+                    return row.get("Paid Date")
+                if not _is_missing(row.get("Paid Date")):
+                    return row.get("Paid Date")
+                paid_through = pd.to_datetime(row.get("Paid Through Date"), errors="coerce")
+                if pd.isna(paid_through):
+                    return None
+                paid_date = paid_through - pd.DateOffset(months=1) + pd.DateOffset(days=1)
+                return paid_date.strftime("%m/%d/%y")
+
+            df["Paid Date"] = df.apply(_calc_paid_date, axis=1)
+
     if "Status" in df.columns:
         # Highlight occupied rows missing required paid dates.
         occupied_mask = df["Status"].eq("Occupied")

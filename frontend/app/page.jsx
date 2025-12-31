@@ -7,6 +7,7 @@ import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 
 export default function Page() {
+  const todayDate = new Date().toISOString().slice(0, 10);
   const [selectedMappingType, setSelectedMappingType] = useState("");
   const [mappingFile, setMappingFile] = useState(null);
   const [mappingFileSource, setMappingFileSource] = useState("");
@@ -15,7 +16,7 @@ export default function Page() {
   const [status, setStatus] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [ownerName, setOwnerName] = useState("");
-  const [migrationDate, setMigrationDate] = useState("");
+  const [migrationDate, setMigrationDate] = useState(todayDate);
 
   const backendUrl =
     process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
@@ -280,6 +281,7 @@ export default function Page() {
               <Input
                 id="migration-date"
                 type="date"
+                value={migrationDate}
                 onChange={(e) => setMigrationDate(e.target.value)}
               />
             </div>
