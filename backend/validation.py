@@ -715,7 +715,7 @@ def normalize_dataframe(
     df = parse_space_type_dimensions(df)
     df = df.copy()
     invalid_cells: Dict[str, List[int]] = {}
-    highlight_cells: Dict[str, Dict[str, List[int]]] = {"red": {}, "blue": {}}
+    highlight_cells: Dict[str, Dict[str, List[int]]] = {"red": {}, "blue": {}, "dark_red": {}}
     invalid_reasons: List[Dict[str, object]] = []
     address_cols = [col for col in df.columns if col in ADDRESS_COLS]
     if address_cols:
@@ -983,7 +983,7 @@ def normalize_dataframe(
                     remapped_invalid[col] = new_idx
             invalid_cells = remapped_invalid
 
-            remapped_highlight = {"red": {}, "blue": {}}
+            remapped_highlight = {"red": {}, "blue": {}, "dark_red": {}}
             for color, col_map in highlight_cells.items():
                 remapped_cols = {}
                 for col, idx_list in col_map.items():
@@ -1035,6 +1035,31 @@ def normalize_dataframe(
                 return paid_date.strftime("%m/%d/%y")
 
             df["Paid Date"] = df.apply(_calc_paid_date, axis=1)
+
+    if "Status" in df.columns:
+        floor_col = next(
+            (col for col in df.columns if str(col).strip().lower() == "floor"),
+            None,
+        )
+        if floor_col:
+            floor_idx = list(df.columns).index(floor_col)
+            after_cols = [
+                col
+                for col in list(df.columns)[floor_idx + 1 :]
+                if not str(col).startswith("_")
+            ]
+            if after_cols:
+                vacant_missing_after = []
+                for idx, row in df.iterrows():
+                    status_value = str(row.get("Status") or "").strip().lower()
+                    if status_value != "vacant":
+                        continue
+                    if all(_is_missing(row.get(col)) for col in after_cols):
+                        vacant_missing_after.append(idx)
+                if vacant_missing_after:
+                    row_highlight = highlight_cells.setdefault("dark_red", {})
+                    for col in df.columns:
+                        row_highlight.setdefault(col, []).extend(vacant_missing_after)
 
     if "Status" in df.columns:
         # Highlight occupied rows missing required paid dates.

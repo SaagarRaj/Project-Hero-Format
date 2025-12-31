@@ -599,6 +599,7 @@ async def process_files(
         header_to_col = {cell.value: cell.column for cell in ws[1]}
         red_fill = PatternFill(start_color="FFFFC7CE", end_color="FFFFC7CE", fill_type="solid")
         blue_fill = PatternFill(start_color="FFBDD7EE", end_color="FFBDD7EE", fill_type="solid")
+        dark_red_fill = PatternFill(start_color="FF9C0006", end_color="FF9C0006", fill_type="solid")
 
         for col, idx_list in invalid_cells.items():
             col_num = header_to_col.get(col)
@@ -610,6 +611,8 @@ async def process_files(
 
         for color, col_map in highlight_cells.items():
             fill = red_fill if color == "red" else blue_fill
+            if color == "dark_red":
+                fill = dark_red_fill
             for col, idx_list in col_map.items():
                 col_num = header_to_col.get(col)
                 if not col_num:
