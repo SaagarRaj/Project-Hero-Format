@@ -17,13 +17,15 @@ def _apply_table_style(ws, start_row: int, end_row: int, end_col: int) -> None:
             cell.border = full_border
 
 
-def write_error_summary_sheet(wb, invalid_reasons: List[Dict[str, object]]) -> None:
+def write_error_summary_sheet(
+    wb, invalid_reasons: List[Dict[str, object]], sheet_name: str = "Error Summary"
+) -> None:
     if not invalid_reasons:
         return
 
-    if "Error Summary" in wb.sheetnames:
-        del wb["Error Summary"]
-    ws = wb.create_sheet("Error Summary")
+    if sheet_name in wb.sheetnames:
+        del wb[sheet_name]
+    ws = wb.create_sheet(sheet_name)
 
     ws.append(["column", "Space ID", "row_number", "reason", "value"])
     invalid_reasons_sorted = sorted(
@@ -42,3 +44,25 @@ def write_error_summary_sheet(wb, invalid_reasons: List[Dict[str, object]]) -> N
         )
 
     _apply_table_style(ws, 1, ws.max_row, 6)
+
+
+def write_highlight_summary_sheet(
+    wb, df, highlights: Dict[str, List[int]] | None, sheet_name: str
+) -> None:
+    if not highlights:
+        return
+
+    if sheet_name in wb.sheetnames:
+        del wb[sheet_name]
+    ws = wb.create_sheet(sheet_name)
+    ws.append(["column", "Space ID", "row_number", "value"])
+
+    for col in sorted(highlights.keys()):
+        idx_list = highlights.get(col) or []
+        for idx in sorted(set(idx_list)):
+            row_number = idx + 2
+            value = df.at[idx, col] if col in df.columns else ""
+            space_value = df.at[idx, "Space"] if "Space" in df.columns else ""
+            ws.append([col, space_value, row_number, value])
+
+    _apply_table_style(ws, 1, ws.max_row, 4)

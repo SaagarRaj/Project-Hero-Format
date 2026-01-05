@@ -108,7 +108,8 @@ export default function Page() {
       formData.append("files", file);
     });
     formData.append("owner_name", ownerName);
-    formData.append("migration_date", migrationDate);
+    const formattedMigrationDate = migrationDate;
+    formData.append("migration_date", formattedMigrationDate);
 
     setIsSubmitting(true);
     try {

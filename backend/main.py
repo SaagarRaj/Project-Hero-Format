@@ -12,7 +12,7 @@ import re
 from typing import Dict, Iterable, List, Optional, Tuple
 from starlette.background import BackgroundTask
 from validation import normalize_dataframe
-from error_summary import write_error_summary_sheet
+from error_summary import write_error_summary_sheet, write_highlight_summary_sheet
 
 app = FastAPI(title="Mapping Normalization API")
 
@@ -555,7 +555,7 @@ async def process_files(
         raise HTTPException(status_code=400, detail="Owner name is required.")
     if not migration_date or migration_date.strip() == "":
         raise HTTPException(status_code=400, detail="Migration date is required.")
-    mig_date = pd.to_datetime(migration_date, errors="coerce")
+    mig_date = pd.to_datetime(migration_date,errors="coerce")
     if pd.isna(mig_date):
         raise HTTPException(status_code=400, detail="Migration date is invalid.")
     if not files:
@@ -574,7 +574,9 @@ async def process_files(
 
     dataframes: Dict[str, pd.DataFrame] = {}
     normalized_columns: Dict[str, Dict[str, str]] = {}
+    input_filenames: List[str] = []
     for upload in files:
+        input_filenames.append(upload.filename or "unknown")
         cleaned_df = read_input_file(upload, mapping_rules)
         report_key = normalize_report_name(upload.filename)
         dataframes[report_key] = cleaned_df
@@ -602,6 +604,7 @@ async def process_files(
     if invalid_cells or any(col_map for col_map in highlight_cells.values()):
         wb = load_workbook(tmp_path)
         ws = wb.active
+        ws.title = "Final Sheet"
         header_to_col = {cell.value: cell.column for cell in ws[1]}
         red_fill = PatternFill(start_color="FFFFC7CE", end_color="FFFFC7CE", fill_type="solid")
         blue_fill = PatternFill(start_color="FFBDD7EE", end_color="FFBDD7EE", fill_type="solid")
@@ -634,24 +637,34 @@ async def process_files(
                     excel_row = idx + 2
                     ws.cell(row=excel_row, column=col_num).fill = fill
 
-        # Add Invalid Entries sheet with column/invalid rows listing.
+        # Write error and calculation summary sheets.
         if invalid_cells:
-            invalid_ws = wb.create_sheet("Invalid Entries")
-            invalid_ws.append(["column", "invalid rows"])
-            for col, idx_list in invalid_cells.items():
-                excel_rows = [str(i + 2) for i in idx_list]  # Excel-style row numbers
-                invalid_ws.append([col, ", ".join(excel_rows)])
-            header_font = Font(bold=True)
-            wrap_alignment = Alignment(wrap_text=True)
-            thin_side = Side(style="thin")
-            full_border = Border(top=thin_side, bottom=thin_side, left=thin_side, right=thin_side)
-            for row in invalid_ws.iter_rows(min_row=1, max_row=invalid_ws.max_row, max_col=2):
-                for cell in row:
-                    if cell.row == 1:
-                        cell.font = header_font
-                    cell.alignment = wrap_alignment
-                    cell.border = full_border
-            write_error_summary_sheet(wb, invalid_reasons)
+            invalid_lookup = {col: set(rows) for col, rows in invalid_cells.items()}
+            error_reasons = [
+                reason
+                for reason in invalid_reasons
+                if reason.get("column") in invalid_lookup
+                and reason.get("row_index") in invalid_lookup[reason.get("column")]
+            ]
+            write_error_summary_sheet(wb, error_reasons, sheet_name="Errors")
+
+        write_highlight_summary_sheet(
+            wb,
+            validated_df,
+            highlight_cells.get("yellow"),
+            sheet_name="Calculated Values",
+        )
+        if "Input Summary" in wb.sheetnames:
+            del wb["Input Summary"]
+        summary_ws = wb.create_sheet("Input Summary")
+        summary_ws.append(["Property Name", owner_name])
+        summary_ws.append(["Migration Date", migration_date])
+        summary_ws.append(["Input Files", ", ".join(input_filenames)])
+        header_font = Font(bold=False, size=14)
+        value_font = Font(bold=True, size=14)
+        for row in summary_ws.iter_rows(min_row=1, max_row=summary_ws.max_row, max_col=2):
+            for cell in row:
+                cell.font = header_font if cell.column == 1 else value_font
         wb.save(tmp_path)
 
         if invalid_cells:
