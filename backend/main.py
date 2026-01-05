@@ -549,9 +549,15 @@ async def process_files(
     files: List[UploadFile] = File(...),
     template: Optional[UploadFile] = File(None),
     owner_name: str = Form(...),
+    migration_date: str = Form(...),
 ):
     if not owner_name or owner_name.strip() == "":
         raise HTTPException(status_code=400, detail="Owner name is required.")
+    if not migration_date or migration_date.strip() == "":
+        raise HTTPException(status_code=400, detail="Migration date is required.")
+    mig_date = pd.to_datetime(migration_date, errors="coerce")
+    if pd.isna(mig_date):
+        raise HTTPException(status_code=400, detail="Migration date is invalid.")
     if not files:
         raise HTTPException(status_code=400, detail="At least one data file is required.")
 
@@ -584,7 +590,7 @@ async def process_files(
 
     # Validate/normalize merged output.
     validated_df, invalid_cells, highlight_cells, invalid_reasons = normalize_dataframe(
-        merged_df, mapping_tmp_path
+        merged_df, mapping_tmp_path, mig_date=migration_date
     )
 
     # Write to a temporary Excel file and return it.

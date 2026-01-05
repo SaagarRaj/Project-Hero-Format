@@ -1909,9 +1909,55 @@ def normalize_dataframe(
                     ptd_invalid.append(idx)
                     add_invalid_reason(idx, "Paid Through Date", v, "Paid Through Date invalid")
                     continue
+                original_ptd = ptd
+                prepaid_col = "Prepaid Rent" if "Prepaid Rent" in df.columns else None
+                if prepaid_col is None and "Prepaid Amount" in df.columns:
+                    prepaid_col = "Prepaid Amount"
+
+                if ptd.date() > last_day:
+                    target_day = min(ptd.day, last_day.day)
+                    try:
+                        ptd = pd.Timestamp(year=mig_date_obj.year, month=mig_date_obj.month, day=target_day)
+                    except Exception:
+                        ptd = pd.Timestamp(year=mig_date_obj.year, month=mig_date_obj.month, day=last_day.day)
+                    df.at[idx, "Paid Through Date"] = ptd.strftime("%m/%d/%y")
+                    highlight_cells.setdefault("yellow", {}).setdefault("Paid Through Date", []).append(idx)
+
+                    excess_days = (original_ptd.date() - ptd.date()).days
+                    rent_val = df.at[idx, "Rent"] if "Rent" in df.columns else None
+                    if excess_days > 0 and prepaid_col:
+                        try:
+                            rent_val_num = float(rent_val)
+                        except Exception:
+                            rent_val_num = None
+                        if rent_val_num is not None:
+                            days_in_month = original_ptd.days_in_month
+                            daily_rate = rent_val_num / float(days_in_month)
+                            excess_amount = round(daily_rate * excess_days, 2)
+                            existing_prepaid = df.at[idx, prepaid_col]
+                            try:
+                                existing_val = float(existing_prepaid) if not _is_missing(existing_prepaid) else 0.0
+                            except Exception:
+                                existing_val = 0.0
+                            df.at[idx, prepaid_col] = existing_val + excess_amount
+                            highlight_cells.setdefault("yellow", {}).setdefault(prepaid_col, []).append(idx)
+                        else:
+                            add_invalid_reason(
+                                idx,
+                                prepaid_col,
+                                rent_val,
+                                "Prepaid not updated (Rent missing or invalid)",
+                            )
+                    elif excess_days > 0 and not prepaid_col:
+                        add_invalid_reason(
+                            idx,
+                            "Paid Through Date",
+                            v,
+                            "Prepaid column not available for excess PTD",
+                        )
                 bill_day_val = df.at[idx, "Bill Day"]
                 rent_balance = df.at[idx, "Rent Balance"] if "Rent Balance" in df.columns else None
-                prepaid_rent = df.at[idx, "Prepaid Rent"] if "Prepaid Rent" in df.columns else None
+                prepaid_rent = df.at[idx, prepaid_col] if prepaid_col else None
 
                 if not _is_missing(bill_day_val):
                     try:
