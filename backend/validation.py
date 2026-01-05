@@ -715,7 +715,7 @@ def normalize_dataframe(
     df = parse_space_type_dimensions(df)
     df = df.copy()
     invalid_cells: Dict[str, List[int]] = {}
-    highlight_cells: Dict[str, Dict[str, List[int]]] = {"red": {}, "blue": {}, "dark_red": {}}
+    highlight_cells: Dict[str, Dict[str, List[int]]] = {"red": {}, "blue": {}, "dark_red": {}, "yellow": {}}
     invalid_reasons: List[Dict[str, object]] = []
     address_cols = [col for col in df.columns if col in ADDRESS_COLS]
     if address_cols:
@@ -947,6 +947,9 @@ def normalize_dataframe(
         df.loc[missing_move_in_mask & paid_present_mask, "Move In Date"] = df.loc[
             missing_move_in_mask & paid_present_mask, "Paid Date"
         ]
+        move_in_filled = [idx for idx, filled in (missing_move_in_mask & paid_present_mask).items() if filled]
+        if move_in_filled:
+            highlight_cells["yellow"]["Move In Date"] = move_in_filled
 
     if "First Name" in df.columns and "Last Name" in df.columns:
         # Derive Status from presence of occupant name.
@@ -983,7 +986,7 @@ def normalize_dataframe(
                     remapped_invalid[col] = new_idx
             invalid_cells = remapped_invalid
 
-            remapped_highlight = {"red": {}, "blue": {}, "dark_red": {}}
+            remapped_highlight = {"red": {}, "blue": {}, "dark_red": {}, "yellow": {}}
             for color, col_map in highlight_cells.items():
                 remapped_cols = {}
                 for col, idx_list in col_map.items():
@@ -1007,6 +1010,7 @@ def normalize_dataframe(
     if "Status" in df.columns:
         if "Paid Date" in df.columns:
             # Paid through date = paid date + 1 month - 1 day
+            paid_through_filled: List[int] = []
             def _calc_paid_through(row):
                 if row.get("Status") != "Occupied":
                     return row.get("Paid Through Date")
@@ -1016,13 +1020,17 @@ def normalize_dataframe(
                 if pd.isna(paid_date):
                     return None
                 paid_through = paid_date + pd.DateOffset(months=1) - pd.DateOffset(days=1)
+                paid_through_filled.append(row.name)
                 return paid_through.strftime("%m/%d/%y")
 
             df["Paid Through Date"] = df.apply(_calc_paid_through, axis=1)
+            if paid_through_filled:
+                highlight_cells["yellow"]["Paid Through Date"] = paid_through_filled
             
     if "Status" in df.columns:
         if "Paid Date" in df.columns and "Paid Through Date" in df.columns:
             # Paid date = paid through date - 1 month + 1 day
+            paid_date_filled: List[int] = []
             def _calc_paid_date(row):
                 if row.get("Status") != "Occupied":
                     return row.get("Paid Date")
@@ -1032,9 +1040,12 @@ def normalize_dataframe(
                 if pd.isna(paid_through):
                     return None
                 paid_date = paid_through - pd.DateOffset(months=1) + pd.DateOffset(days=1)
+                paid_date_filled.append(row.name)
                 return paid_date.strftime("%m/%d/%y")
 
             df["Paid Date"] = df.apply(_calc_paid_date, axis=1)
+            if paid_date_filled:
+                highlight_cells["yellow"]["Paid Date"] = paid_date_filled
 
     if "Status" in df.columns:
         floor_col = next(
@@ -1143,8 +1154,8 @@ def normalize_dataframe(
             access_code_rows.append(idx)
 
         if access_code_rows:
-            highlight_cells["blue"]["Access Code"] = access_code_rows
-            highlight_cells["blue"]["Account Code"] = access_code_rows
+            highlight_cells["yellow"]["Access Code"] = access_code_rows
+            highlight_cells["yellow"]["Account Code"] = access_code_rows
 
 
     if "Width" in df.columns and "Length" in df.columns:
@@ -1177,13 +1188,19 @@ def normalize_dataframe(
         )
         space_size_rows = [idx for idx, applied in default_applied_mask.items() if applied]
         if space_size_rows:
-            highlight_cells["red"]["Space Size"] = space_size_rows
-            highlight_cells["red"]["Sq. Ft."] = space_size_rows
+            highlight_cells["yellow"]["Space Size"] = space_size_rows
+            highlight_cells["yellow"]["Sq. Ft."] = space_size_rows
 
 
     if "State" in df.columns and "Country" in df.columns:
         # Set Country to United States when State is a valid US abbreviation.
-        df.loc[df["State"].apply(lambda x: is_valid_state_abbrev(x) if pd.notna(x) else False), "Country"] = "United States"
+        state_valid_mask = df["State"].apply(lambda x: is_valid_state_abbrev(x) if pd.notna(x) else False)
+        country_missing_mask = df["Country"].apply(_is_missing)
+        country_fill_mask = state_valid_mask & country_missing_mask
+        df.loc[country_fill_mask, "Country"] = "United States"
+        country_filled = [idx for idx, filled in country_fill_mask.items() if filled]
+        if country_filled:
+            highlight_cells["yellow"]["Country"] = country_filled
     
     if "Width" in df.columns and "Length" in df.columns:
         # Compute Sq. Ft. as Width * Length when both are present.
@@ -1195,7 +1212,17 @@ def normalize_dataframe(
         )
     if "Paid Through Date" in df.columns:
         # Derive Bill Day from Paid Through Date.
+        bill_day_missing = (
+            df["Bill Day"].apply(_is_missing) if "Bill Day" in df.columns else pd.Series(True, index=df.index)
+        )
         df["Bill Day"] = df["Paid Through Date"].apply(compute_bill_day)
+        bill_day_filled = [
+            idx
+            for idx in df.index
+            if bill_day_missing.get(idx, False) and not _is_missing(df.at[idx, "Bill Day"])
+        ]
+        if bill_day_filled:
+            highlight_cells["yellow"]["Bill Day"] = bill_day_filled
 
     if "_space_size_parsed" in df.columns:
         df = df.drop(columns=["_space_size_parsed"])
