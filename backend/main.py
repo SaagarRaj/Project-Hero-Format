@@ -595,6 +595,47 @@ async def process_files(
         merged_df, mapping_tmp_path, mig_date=migration_date
     )
 
+    # Sort after validation while preserving correct highlight indices.
+    if "First Name" in validated_df.columns:
+        validated_df = validated_df.copy()
+        validated_df["_orig_index"] = validated_df.index
+        validated_df = validated_df.sort_values(
+            by="First Name",
+            key=lambda col: col.astype(str).str.lower(),
+            na_position="last",
+        ).reset_index(drop=True)
+        index_map = {
+            int(row["_orig_index"]): int(idx) for idx, row in validated_df.iterrows()
+        }
+        validated_df = validated_df.drop(columns=["_orig_index"])
+
+        remapped_invalid = {}
+        for col, idx_list in invalid_cells.items():
+            remapped = [index_map[i] for i in idx_list if i in index_map]
+            if remapped:
+                remapped_invalid[col] = remapped
+        invalid_cells = remapped_invalid
+
+        remapped_highlight = {"red": {}, "blue": {}, "dark_red": {}, "yellow": {}}
+        for color, col_map in highlight_cells.items():
+            remapped_cols = {}
+            for col, idx_list in col_map.items():
+                remapped = [index_map[i] for i in idx_list if i in index_map]
+                if remapped:
+                    remapped_cols[col] = remapped
+            if remapped_cols:
+                remapped_highlight[color] = remapped_cols
+        highlight_cells = remapped_highlight
+
+        remapped_reasons = []
+        for reason in invalid_reasons:
+            old_idx = reason.get("row_index")
+            if old_idx in index_map:
+                updated = dict(reason)
+                updated["row_index"] = index_map[old_idx]
+                remapped_reasons.append(updated)
+        invalid_reasons = remapped_reasons
+
     # Write to a temporary Excel file and return it.
     with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
         tmp_path = tmp.name
@@ -604,7 +645,7 @@ async def process_files(
     if invalid_cells or any(col_map for col_map in highlight_cells.values()):
         wb = load_workbook(tmp_path)
         ws = wb.active
-        ws.title = "Final Sheet"
+        ws.title = "Final Sheet (View Only)"
         header_to_col = {cell.value: cell.column for cell in ws[1]}
         red_fill = PatternFill(start_color="FFFFC7CE", end_color="FFFFC7CE", fill_type="solid")
         blue_fill = PatternFill(start_color="FFBDD7EE", end_color="FFBDD7EE", fill_type="solid")

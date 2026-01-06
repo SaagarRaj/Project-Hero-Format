@@ -1900,6 +1900,7 @@ def normalize_dataframe(
             mig_date_obj = pd.NaT
         if pd.notna(mig_date_obj):
             last_day = (mig_date_obj + pd.offsets.MonthEnd(0)).date()
+            mig_date_value = mig_date_obj.date()
             ptd_invalid = []
             for idx, v in df["Paid Through Date"].items():
                 if _is_missing(v):
@@ -1914,26 +1915,29 @@ def normalize_dataframe(
                 if prepaid_col is None and "Prepaid Amount" in df.columns:
                     prepaid_col = "Prepaid Amount"
 
-                if ptd.date() > last_day:
-                    target_day = min(ptd.day, last_day.day)
-                    try:
-                        ptd = pd.Timestamp(year=mig_date_obj.year, month=mig_date_obj.month, day=target_day)
-                    except Exception:
-                        ptd = pd.Timestamp(year=mig_date_obj.year, month=mig_date_obj.month, day=last_day.day)
+                if ptd.date() > mig_date_value and (
+                    original_ptd.year, original_ptd.month
+                ) != (mig_date_obj.year, mig_date_obj.month):
+                    ptd = pd.Timestamp(
+                        year=mig_date_obj.year,
+                        month=mig_date_obj.month,
+                        day=last_day.day,
+                    )
                     df.at[idx, "Paid Through Date"] = ptd.strftime("%m/%d/%y")
                     highlight_cells.setdefault("yellow", {}).setdefault("Paid Through Date", []).append(idx)
 
-                    excess_days = (original_ptd.date() - ptd.date()).days
                     rent_val = df.at[idx, "Rent"] if "Rent" in df.columns else None
-                    if excess_days > 0 and prepaid_col:
+                    months_excess = (
+                        (original_ptd.year - mig_date_obj.year) * 12
+                        + (original_ptd.month - mig_date_obj.month)
+                    )
+                    if months_excess > 0 and prepaid_col:
                         try:
                             rent_val_num = float(rent_val)
                         except Exception:
                             rent_val_num = None
                         if rent_val_num is not None:
-                            days_in_month = original_ptd.days_in_month
-                            daily_rate = rent_val_num / float(days_in_month)
-                            excess_amount = round(daily_rate * excess_days, 2)
+                            excess_amount = round(rent_val_num * months_excess, 2)
                             existing_prepaid = df.at[idx, prepaid_col]
                             try:
                                 existing_val = float(existing_prepaid) if not _is_missing(existing_prepaid) else 0.0
@@ -1948,7 +1952,7 @@ def normalize_dataframe(
                                 rent_val,
                                 "Prepaid not updated (Rent missing or invalid)",
                             )
-                    elif excess_days > 0 and not prepaid_col:
+                    elif months_excess > 0 and not prepaid_col:
                         add_invalid_reason(
                             idx,
                             "Paid Through Date",
