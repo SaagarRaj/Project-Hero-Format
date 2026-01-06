@@ -591,7 +591,7 @@ async def process_files(
     )
 
     # Validate/normalize merged output.
-    validated_df, invalid_cells, highlight_cells, invalid_reasons = normalize_dataframe(
+    validated_df, invalid_cells, highlight_cells, invalid_reasons, highlight_prev_values = normalize_dataframe(
         merged_df, mapping_tmp_path, mig_date=migration_date
     )
 
@@ -644,6 +644,16 @@ async def process_files(
                 updated["row_index"] = index_map[old_idx]
                 remapped_reasons.append(updated)
         invalid_reasons = remapped_reasons
+
+        remapped_prev = {}
+        for col, idx_map in highlight_prev_values.items():
+            new_idx_map = {}
+            for old_idx, prev_value in idx_map.items():
+                if old_idx in index_map:
+                    new_idx_map[index_map[old_idx]] = prev_value
+            if new_idx_map:
+                remapped_prev[col] = new_idx_map
+        highlight_prev_values = remapped_prev
 
     # Write to a temporary Excel file and return it.
     with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
@@ -702,6 +712,7 @@ async def process_files(
             wb,
             validated_df,
             highlight_cells.get("yellow"),
+            highlight_prev_values,
             sheet_name="Calculated Values",
         )
         if "Input Summary" in wb.sheetnames:

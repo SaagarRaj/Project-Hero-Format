@@ -1069,7 +1069,13 @@ def compute_bill_day(val):
 
 def normalize_dataframe(
     df: pd.DataFrame, mapping_path: str, mig_date: str | None = None
-) -> Tuple[pd.DataFrame, Dict[str, List[int]], Dict[str, Dict[str, List[int]]], List[Dict[str, object]]]:
+) -> Tuple[
+    pd.DataFrame,
+    Dict[str, List[int]],
+    Dict[str, Dict[str, List[int]]],
+    List[Dict[str, object]],
+    Dict[str, Dict[int, object]],
+]:
     """
     Accepts a merged DataFrame
     Applies mapping-driven defaults, validation, normalization, and derived column logic
@@ -1077,7 +1083,8 @@ def normalize_dataframe(
         - cleaned DataFrame
         - invalid_cells: dict[column_name] -> list[row_index]
         - highlight_cells: dict[color] -> dict[column_name] -> list[row_index] (for informational highlighting)
-        - mig_date: optional migration date for paid-through validations (YYYY-MM-DD)
+        - highlight_prev_values: dict[column_name] -> dict[row_index] -> previous_value (yellow highlight tracking)
+        - mig_date: optional migration date for paid-through validations (MM/DD/YYYY)
     """
     df = normalize_column_headers(df)
     df = map_phone_columns(df)
@@ -1097,6 +1104,7 @@ def normalize_dataframe(
     df = df.copy()
     invalid_cells: Dict[str, List[int]] = {}
     highlight_cells: Dict[str, Dict[str, List[int]]] = {"red": {}, "blue": {}, "dark_red": {}, "yellow": {}}
+    highlight_prev_values: Dict[str, Dict[int, object]] = {}
     invalid_reasons: List[Dict[str, object]] = []
     address_cols = [col for col in df.columns if col in ADDRESS_COLS]
     if address_cols:
@@ -1137,6 +1145,16 @@ def normalize_dataframe(
                 "reason": reason,
             }
         )
+
+    def record_prev_value(col: str, idx: int, prev_value: object) -> None:
+        highlight_prev_values.setdefault(col, {})
+        if idx not in highlight_prev_values[col]:
+            highlight_prev_values[col][idx] = prev_value
+
+    def set_value_with_prev(col: str, idx: int, new_value: object) -> None:
+        prev_value = df.at[idx, col] if col in df.columns else None
+        record_prev_value(col, idx, prev_value)
+        df.at[idx, col] = new_value
 
     for col in df.columns:
         if col == "First Name":
@@ -1499,10 +1517,9 @@ def normalize_dataframe(
         # Fill missing Move In Date with Paid Date when available.
         missing_move_in_mask = df["Move In Date"].apply(_is_missing)
         paid_present_mask = ~df["Paid Date"].apply(_is_missing)
-        df.loc[missing_move_in_mask & paid_present_mask, "Move In Date"] = df.loc[
-            missing_move_in_mask & paid_present_mask, "Paid Date"
-        ]
         move_in_filled = [idx for idx, filled in (missing_move_in_mask & paid_present_mask).items() if filled]
+        for idx in move_in_filled:
+            set_value_with_prev("Move In Date", idx, df.at[idx, "Paid Date"])
         if move_in_filled:
             highlight_cells["yellow"]["Move In Date"] = move_in_filled
 
@@ -1582,6 +1599,7 @@ def normalize_dataframe(
         if "Paid Date" in df.columns:
             # Paid through date = paid date + 1 month - 1 day
             paid_through_filled: List[int] = []
+            original_paid_through = df["Paid Through Date"].copy() if "Paid Through Date" in df.columns else None
             def _calc_paid_through(row):
                 if row.get("Status") != "Occupied":
                     return row.get("Paid Through Date")
@@ -1596,12 +1614,16 @@ def normalize_dataframe(
 
             df["Paid Through Date"] = df.apply(_calc_paid_through, axis=1)
             if paid_through_filled:
+                if original_paid_through is not None:
+                    for idx in paid_through_filled:
+                        record_prev_value("Paid Through Date", idx, original_paid_through.at[idx])
                 highlight_cells["yellow"]["Paid Through Date"] = paid_through_filled
             
     if "Status" in df.columns:
         if "Paid Date" in df.columns and "Paid Through Date" in df.columns:
             # Paid date = paid through date - 1 month + 1 day
             paid_date_filled: List[int] = []
+            original_paid_date = df["Paid Date"].copy()
             def _calc_paid_date(row):
                 if row.get("Status") != "Occupied":
                     return row.get("Paid Date")
@@ -1616,6 +1638,8 @@ def normalize_dataframe(
 
             df["Paid Date"] = df.apply(_calc_paid_date, axis=1)
             if paid_date_filled:
+                for idx in paid_date_filled:
+                    record_prev_value("Paid Date", idx, original_paid_date.at[idx])
                 highlight_cells["yellow"]["Paid Date"] = paid_date_filled
 
     if "Status" in df.columns:
@@ -1725,31 +1749,31 @@ def normalize_dataframe(
             if _is_missing(current_access) and _is_missing(current_account):
                 phone_digits = cell_digits or alt_digits
                 if phone_digits:
-                    df.at[idx, "Account Code"] = phone_digits
-                    df.at[idx, "Access Code"] = _last4(phone_digits)
+                    set_value_with_prev("Account Code", idx, phone_digits)
+                    set_value_with_prev("Access Code", idx, _last4(phone_digits))
                 elif _has_name(idx):
                     dummy_code = str(dummy_counter) * 4
                     dummy_counter += 1
-                    df.at[idx, "Account Code"] = dummy_code
-                    df.at[idx, "Access Code"] = dummy_code
+                    set_value_with_prev("Account Code", idx, dummy_code)
+                    set_value_with_prev("Access Code", idx, dummy_code)
                     access_code_rows.append(idx)
 
             # Account missing but Access present.
             if _is_missing(current_account) and not _is_missing(current_access):
                 if cell_digits or alt_digits:
-                    df.at[idx, "Account Code"] = (cell_digits or alt_digits)
+                    set_value_with_prev("Account Code", idx, (cell_digits or alt_digits))
                 else:
-                    df.at[idx, "Account Code"] = current_access
+                    set_value_with_prev("Account Code", idx, current_access)
                 access_code_rows.append(idx)
 
             # Access missing but Account present.
             if _is_missing(current_access) and not _is_missing(current_account):
                 phone_last4 = _last4(cell_digits) or _last4(alt_digits)
                 if phone_last4:
-                    df.at[idx, "Access Code"] = phone_last4
+                    set_value_with_prev("Access Code", idx, phone_last4)
                 elif _has_name(idx):
                     access_code_val = _generate_unique_access_code(used_access_codes)
-                    df.at[idx, "Access Code"] = access_code_val
+                    set_value_with_prev("Access Code", idx, access_code_val)
                 access_code_rows.append(idx)
 
             # Track used access codes.
@@ -1815,6 +1839,8 @@ def normalize_dataframe(
         occupied_mask = (
             df["Status"].eq("Occupied") if "Status" in df.columns else pd.Series(False, index=df.index)
         )
+        original_space_size = df["Space Size"].copy() if "Space Size" in df.columns else None
+        original_sq_ft = df["Sq. Ft."].copy() if "Sq. Ft." in df.columns else None
         space_size_missing_mask = (
             df["Space Size"].apply(_is_missing) if "Space Size" in df.columns else pd.Series(True, index=df.index)
         )
@@ -1840,6 +1866,12 @@ def normalize_dataframe(
         )
         space_size_rows = [idx for idx, applied in default_applied_mask.items() if applied]
         if space_size_rows:
+            if original_space_size is not None:
+                for idx in space_size_rows:
+                    record_prev_value("Space Size", idx, original_space_size.at[idx])
+            if original_sq_ft is not None:
+                for idx in space_size_rows:
+                    record_prev_value("Sq. Ft.", idx, original_sq_ft.at[idx])
             highlight_cells["yellow"]["Space Size"] = space_size_rows
             highlight_cells["yellow"]["Sq. Ft."] = space_size_rows
 
@@ -1849,9 +1881,14 @@ def normalize_dataframe(
         state_valid_mask = df["State"].apply(lambda x: is_valid_state_abbrev(x) if pd.notna(x) else False)
         country_missing_mask = df["Country"].apply(_is_missing)
         country_fill_mask = state_valid_mask & country_missing_mask
-        df.loc[country_fill_mask, "Country"] = "United States"
+        if country_fill_mask.any():
+            original_country = df["Country"].copy()
+            df.loc[country_fill_mask, "Country"] = "United States"
         country_filled = [idx for idx, filled in country_fill_mask.items() if filled]
         if country_filled:
+            if "original_country" in locals():
+                for idx in country_filled:
+                    record_prev_value("Country", idx, original_country.at[idx])
             highlight_cells["yellow"]["Country"] = country_filled
     
     if "Width" in df.columns and "Length" in df.columns:
@@ -1867,6 +1904,7 @@ def normalize_dataframe(
         bill_day_missing = (
             df["Bill Day"].apply(_is_missing) if "Bill Day" in df.columns else pd.Series(True, index=df.index)
         )
+        original_bill_day = df["Bill Day"].copy() if "Bill Day" in df.columns else None
         df["Bill Day"] = df["Paid Through Date"].apply(compute_bill_day)
         bill_day_filled = [
             idx
@@ -1874,6 +1912,9 @@ def normalize_dataframe(
             if bill_day_missing.get(idx, False) and not _is_missing(df.at[idx, "Bill Day"])
         ]
         if bill_day_filled:
+            if original_bill_day is not None:
+                for idx in bill_day_filled:
+                    record_prev_value("Bill Day", idx, original_bill_day.at[idx])
             highlight_cells["yellow"]["Bill Day"] = bill_day_filled
 
     if "Bill Day" in df.columns:
@@ -1923,7 +1964,7 @@ def normalize_dataframe(
                         month=mig_date_obj.month,
                         day=last_day.day,
                     )
-                    df.at[idx, "Paid Through Date"] = ptd.strftime("%m/%d/%y")
+                    set_value_with_prev("Paid Through Date", idx, ptd.strftime("%m/%d/%y"))
                     highlight_cells.setdefault("yellow", {}).setdefault("Paid Through Date", []).append(idx)
 
                     rent_val = df.at[idx, "Rent"] if "Rent" in df.columns else None
@@ -1943,7 +1984,7 @@ def normalize_dataframe(
                                 existing_val = float(existing_prepaid) if not _is_missing(existing_prepaid) else 0.0
                             except Exception:
                                 existing_val = 0.0
-                            df.at[idx, prepaid_col] = existing_val + excess_amount
+                            set_value_with_prev(prepaid_col, idx, existing_val + excess_amount)
                             highlight_cells.setdefault("yellow", {}).setdefault(prepaid_col, []).append(idx)
                         else:
                             add_invalid_reason(
@@ -2026,23 +2067,37 @@ def normalize_dataframe(
                 set(invalid_cells.get("Security Deposit Balance", []) + sec_invalid)
             )
 
-    for col in ("Rent Balance", "Prepaid Rent"):
-        if col not in df.columns:
-            continue
+    if "Rent Balance" in df.columns:
+        rent_balance_updated = []
+        for idx, v in df["Rent Balance"].items():
+            if _is_missing(v):
+                set_value_with_prev("Rent Balance", idx, None)
+                continue
+            try:
+                val = float(v)
+            except Exception:
+                continue
+            if val <= 0:
+                set_value_with_prev("Rent Balance", idx, None)
+                rent_balance_updated.append(idx)
+        if rent_balance_updated:
+            highlight_cells.setdefault("yellow", {}).setdefault("Rent Balance", []).extend(rent_balance_updated)
+
+    if "Prepaid Rent" in df.columns:
         neg_invalid = []
-        for idx, v in df[col].items():
+        for idx, v in df["Prepaid Rent"].items():
             if _is_missing(v):
                 continue
             try:
                 if float(v) < 0:
                     neg_invalid.append(idx)
-                    add_invalid_reason(idx, col, v, f"{col} is negative")
+                    add_invalid_reason(idx, "Prepaid Rent", v, "Prepaid Rent is negative")
             except Exception:
                 continue
         if neg_invalid:
-            invalid_cells[col] = sorted(set(invalid_cells.get(col, []) + neg_invalid))
+            invalid_cells["Prepaid Rent"] = sorted(set(invalid_cells.get("Prepaid Rent", []) + neg_invalid))
 
     if "_space_size_parsed" in df.columns:
         df = df.drop(columns=["_space_size_parsed"])
 
-    return df, invalid_cells, highlight_cells, invalid_reasons
+    return df, invalid_cells, highlight_cells, invalid_reasons, highlight_prev_values

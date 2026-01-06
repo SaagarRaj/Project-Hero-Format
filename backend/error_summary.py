@@ -47,7 +47,11 @@ def write_error_summary_sheet(
 
 
 def write_highlight_summary_sheet(
-    wb, df, highlights: Dict[str, List[int]] | None, sheet_name: str
+    wb,
+    df,
+    highlights: Dict[str, List[int]] | None,
+    prev_values: Dict[str, Dict[int, object]] | None,
+    sheet_name: str,
 ) -> None:
     if not highlights:
         return
@@ -55,7 +59,7 @@ def write_highlight_summary_sheet(
     if sheet_name in wb.sheetnames:
         del wb[sheet_name]
     ws = wb.create_sheet(sheet_name)
-    ws.append(["column", "Space ID", "row_number", "value"])
+    ws.append(["column", "Space ID", "row_number", "value", "prev_value"])
 
     for col in sorted(highlights.keys()):
         idx_list = highlights.get(col) or []
@@ -63,6 +67,9 @@ def write_highlight_summary_sheet(
             row_number = idx + 2
             value = df.at[idx, col] if col in df.columns else ""
             space_value = df.at[idx, "Space"] if "Space" in df.columns else ""
-            ws.append([col, space_value, row_number, value])
+            prev_value = ""
+            if prev_values and col in prev_values and idx in prev_values[col]:
+                prev_value = prev_values[col][idx]
+            ws.append([col, space_value, row_number, value, prev_value])
 
-    _apply_table_style(ws, 1, ws.max_row, 4)
+    _apply_table_style(ws, 1, ws.max_row, 5)
