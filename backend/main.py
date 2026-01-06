@@ -599,15 +599,24 @@ async def process_files(
     if "First Name" in validated_df.columns:
         validated_df = validated_df.copy()
         validated_df["_orig_index"] = validated_df.index
+        validated_df["_first_name_norm"] = (
+            validated_df["First Name"]
+            .fillna("")
+            .astype(str)
+            .str.strip()
+            .str.lower()
+        )
+        validated_df["_first_name_blank"] = validated_df["_first_name_norm"].isin(
+            ["", "nan", "none", "null", "na", "n/a"]
+        )
         validated_df = validated_df.sort_values(
-            by="First Name",
-            key=lambda col: col.astype(str).str.lower(),
+            by=["_first_name_blank", "_first_name_norm"],
             na_position="last",
         ).reset_index(drop=True)
         index_map = {
             int(row["_orig_index"]): int(idx) for idx, row in validated_df.iterrows()
         }
-        validated_df = validated_df.drop(columns=["_orig_index"])
+        validated_df = validated_df.drop(columns=["_orig_index", "_first_name_norm", "_first_name_blank"])
 
         remapped_invalid = {}
         for col, idx_list in invalid_cells.items():
