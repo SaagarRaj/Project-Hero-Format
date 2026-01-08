@@ -1,14 +1,17 @@
-# Excel Mapping Normalizer
+# Hero Format Mapping Tool
 
-FastAPI + Next.js app that merges multiple CSV/Excel reports into a single normalized Excel output using a strict mapping file. It also validates and enriches specific columns (phones, money, dates, state, ZIP, access code, space size) and marks issues directly in the output workbook.
+FastAPI + Next.js app that turns messy PMS exports (CSV/XLS/XLSX) into a single, validated Hero Format Excel output using a strict mapping file. It supports predefined PMS templates, custom mappings, Drive uploads, and pre-validation to flag issues before delivery.
 
-## What it does
-- Accepts a required `mapping.xlsx`, optional `template.xlsx`, and one or more data files (CSV/XLS/XLSX).
-- Cleans messy headers by auto-detecting the header row.
-- Resolves columns using exact/normalized/variation/fuzzy matching.
-- Joins reports by a detected key when possible, otherwise aligns rows by position.
-- Applies validation, normalization, and derived-field logic.
-- Returns `final_output.xlsx` with cell highlights and an optional `Invalid Entries` sheet.
+## What the tool does
+- Accepts a required mapping file, optional template file, and one or more data files.
+- Supports predefined PMS mapping templates and custom mapping files.
+- Downloads blank mapping templates or PMS-specific mapping templates.
+- Lets users upload files locally or pick them directly from Google Drive.
+- Exports Google Sheets to XLSX on the fly.
+- Detects header rows in messy files and aligns columns using exact/normalized/variation matching.
+- Merges reports by a detected key when possible, otherwise aligns rows by position.
+- Applies Hummingbird pre-validation and in-app validation/normalization.
+- Produces `final_output.xlsx` with highlights and an optional `Invalid Entries` sheet.
 
 ## Quick start (Docker)
 ```bash
@@ -34,9 +37,15 @@ npm install
 npm run dev
 ```
 
-Set `NEXT_PUBLIC_BACKEND_URL` if the backend is not on `http://localhost:8000`.
+## Environment variables
+Frontend (`app/frontend/.env.local`):
+```
+NEXT_PUBLIC_BACKEND_URL=http://localhost:8000
+NEXT_PUBLIC_GOOGLE_CLIENT_ID=your_google_oauth_client_id
+NEXT_PUBLIC_GOOGLE_API_KEY=your_google_api_key
+```
 
-## API usage
+## API usage (backend)
 ```bash
 curl -X POST http://localhost:8000/process \
   -F "mapping=@mapping.xlsx" \
@@ -46,7 +55,7 @@ curl -X POST http://localhost:8000/process \
   --output final_output.xlsx
 ```
 
-## Mapping file (strict format)
+## Mapping file format (strict)
 `mapping.xlsx` must include these columns:
 - `output_col`
 - `report_name`
@@ -82,7 +91,7 @@ Input files are read without headers. The app scans up to 25 rows and scores eac
 
 The highest scoring row becomes the header; rows above it are discarded.
 
-## Join strategy
+## Merge strategy
 The backend looks for a shared key across reports using normalized column names present in at least two reports. It scores candidates by:
 - coverage and uniqueness
 - name hints (id, email, address, space, unit)
@@ -90,7 +99,7 @@ The backend looks for a shared key across reports using normalized column names 
 If a join key is found, rows are merged by that key. Otherwise, rows are aligned by index.
 
 ## Validation and enrichment
-After merging, the output is normalized using `app/backend/validation.py`.
+After merging, the output is normalized using `app/backend/validation.py` plus the Hummingbird pre-validation flow.
 
 ### Column cleaning
 Only columns with these exact names are cleaned:

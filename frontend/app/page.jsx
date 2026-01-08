@@ -342,6 +342,40 @@ export default function Page() {
           </p>
         </div>
         <form onSubmit={handleSubmit}>
+          <div className="mb-6 rounded-2xl border border-slate-200 bg-white/80 p-5">
+            <h2 className="text-base font-semibold text-slate-900">
+              Upload Sources
+            </h2>
+            <p className="mt-1 text-xs text-slate-600">
+              Use Local Upload, Google Drive, or both to provide input files.
+            </p>
+            <div className="mt-4 flex flex-wrap gap-4">
+              <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={useLocalUpload}
+                  onChange={(e) => setUseLocalUpload(e.target.checked)}
+                  className="h-4 w-4 text-emerald-500"
+                />
+                Local Upload
+              </label>
+              <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={useDriveUpload}
+                  onChange={(e) => setUseDriveUpload(e.target.checked)}
+                  className="h-4 w-4 text-emerald-500"
+                />
+                Google Drive
+              </label>
+            </div>
+            {useDriveUpload && (!googleClientId || !googleApiKey) && (
+              <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                Missing Google Drive keys. Set NEXT_PUBLIC_GOOGLE_CLIENT_ID and
+                NEXT_PUBLIC_GOOGLE_API_KEY.
+              </div>
+            )}
+          </div>
           <div className="mb-6 rounded-2xl border border-amber-100 bg-amber-50/50 p-5">
             <h2 className="text-base font-semibold text-slate-900">
               Select Mapping File <span className="text-rose-600">*</span>
@@ -418,41 +452,6 @@ export default function Page() {
             </div>
           </div>
 
-          <div className="mb-6 rounded-2xl border border-slate-200 bg-white/80 p-5">
-            <h2 className="text-base font-semibold text-slate-900">
-              Upload Sources
-            </h2>
-            <p className="mt-1 text-xs text-slate-600">
-              Use Local Upload, Google Drive, or both to provide input files.
-            </p>
-            <div className="mt-4 flex flex-wrap gap-4">
-              <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
-                <input
-                  type="checkbox"
-                  checked={useLocalUpload}
-                  onChange={(e) => setUseLocalUpload(e.target.checked)}
-                  className="h-4 w-4 text-emerald-500"
-                />
-                Local Upload
-              </label>
-              <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
-                <input
-                  type="checkbox"
-                  checked={useDriveUpload}
-                  onChange={(e) => setUseDriveUpload(e.target.checked)}
-                  className="h-4 w-4 text-emerald-500"
-                />
-                Google Drive
-              </label>
-            </div>
-            {useDriveUpload && (!googleClientId || !googleApiKey) && (
-              <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                Missing Google Drive keys. Set NEXT_PUBLIC_GOOGLE_CLIENT_ID and
-                NEXT_PUBLIC_GOOGLE_API_KEY.
-              </div>
-            )}
-          </div>
-
           {useLocalUpload && (
             <div className="grid gap-5 md:grid-cols-2">
               <div>
@@ -499,9 +498,12 @@ export default function Page() {
                   onClick={requestDriveToken}
                   disabled={isDriveConnecting || !isDriveReady}
                 >
-                  {driveAccessToken
-                    ? "Reconnect Drive"
-                    : "Connect Google Drive"}
+                  <span>{!driveAccessToken ? "Connect" : "Reconnect"}</span>
+                  <img
+                    src="/drive-favicon.png"
+                    alt=""
+                    className="ml-2 h-5 w-5 rounded-md bg-white p-0.5"
+                  />
                 </Button>
               </div>
               {driveError && (
@@ -605,22 +607,34 @@ export default function Page() {
               <div className="font-semibold text-slate-900">Selected Files</div>
               {selectedMappingType === "CUSTOM" && (
                 <div className="mt-2">
-                  Mapping:{" "}
-                  {driveMappingFile
-                    ? `${driveMappingFile.name} (Drive)`
-                    : mappingFile
-                    ? `${mappingFile.name} (Local)`
-                    : "None"}
+                  <div className="text-[11px] uppercase tracking-[0.2em] text-slate-400">
+                    Mapping
+                  </div>
+                  <div className="mt-1">
+                    {driveMappingFile
+                      ? `${driveMappingFile.name} (Drive)`
+                      : mappingFile
+                      ? `${mappingFile.name} (Local)`
+                      : "None"}
+                  </div>
                 </div>
               )}
-              <div className="mt-2">
-                Inputs:{" "}
-                {[
-                  ...Array.from(dataFiles || []).map(
-                    (file) => `${file.name} (Local)`
-                  ),
-                  ...driveDataFiles.map((file) => `${file.name} (Drive)`),
-                ].join(", ") || "None"}
+              <div className="mt-3">
+                <div className="text-[11px] uppercase tracking-[0.2em] text-slate-400">
+                  Inputs
+                </div>
+                {dataFiles.length === 0 && driveDataFiles.length === 0 ? (
+                  <div className="mt-1">None</div>
+                ) : (
+                  <ul className="mt-2 space-y-1">
+                    {Array.from(dataFiles || []).map((file) => (
+                      <li key={`local-${file.name}`}>{file.name} (Local)</li>
+                    ))}
+                    {driveDataFiles.map((file) => (
+                      <li key={`drive-${file.id}`}>{file.name} (Drive)</li>
+                    ))}
+                  </ul>
+                )}
               </div>
             </div>
           )}
