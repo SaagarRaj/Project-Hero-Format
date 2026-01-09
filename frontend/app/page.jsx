@@ -19,6 +19,7 @@ export default function Page() {
   const [migrationDate, setMigrationDate] = useState(todayDate);
   const [useLocalUpload, setUseLocalUpload] = useState(true);
   const [useDriveUpload, setUseDriveUpload] = useState(false);
+  const [pmsGroup, setPmsGroup] = useState("Datacarve");
   const [driveAccessToken, setDriveAccessToken] = useState("");
   const [isDriveReady, setIsDriveReady] = useState(false);
   const [isDriveConnecting, setIsDriveConnecting] = useState(false);
@@ -39,6 +40,17 @@ export default function Page() {
     SiteLink: "/MappingTemplate/SiteLink/siteLink_mapping.xlsx",
     Storage_Commander: "/MappingTemplate/storageCommander_mapping.xlsx",
     CUSTOM: "/MappingTemplate/General/mapping_template.xlsx",
+  };
+  const pmsOptions = {
+    Datacarve: [
+      { value: "SSM", label: "SSM" },
+      { value: "SiteLink", label: "SiteLink" },
+    ],
+    Reports: [
+      { value: "ESS", label: "ESS" },
+      { value: "StorEdge", label: "StorEdge" },
+      { value: "Storage_Commander", label: "Storage Commander" },
+    ],
   };
 
   const loadScript = (src) =>
@@ -389,6 +401,36 @@ export default function Page() {
                 <Label className="text-xs uppercase tracking-[0.2em] text-slate-500">
                   Predefined PMS Mapping
                 </Label>
+                <div className="flex flex-wrap gap-8 rounded-xl border border-slate-200 bg-white/70 px-3 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
+                  <label className="flex items-center gap-2 text-[11px] text-slate-600">
+                    <input
+                      type="radio"
+                      name="pms-group"
+                      value="Datacarve"
+                      checked={pmsGroup === "Datacarve"}
+                      onChange={(e) => {
+                        setPmsGroup(e.target.value);
+                        setSelectedMappingType("");
+                      }}
+                      className="h-4 w-4 text-emerald-500"
+                    />
+                    Datacarve
+                  </label>
+                  <label className="flex items-center gap-2 text-[11px] text-slate-600">
+                    <input
+                      type="radio"
+                      name="pms-group"
+                      value="Reports"
+                      checked={pmsGroup === "Reports"}
+                      onChange={(e) => {
+                        setPmsGroup(e.target.value);
+                        setSelectedMappingType("");
+                      }}
+                      className="h-4 w-4 text-emerald-500"
+                    />
+                    Reports
+                  </label>
+                </div>
                 <select
                   className="w-full rounded-xl border border-slate-300/80 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm transition focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-200"
                   value={
@@ -398,11 +440,11 @@ export default function Page() {
                   disabled={selectedMappingType === "CUSTOM"}
                 >
                   <option value="">Select Property Management System</option>
-                  <option value="ESS">ESS</option>
-                  <option value="SSM">SSM</option>
-                  <option value="StorEdge">StorEdge</option>
-                  <option value="SiteLink">SiteLink</option>
-                  <option value="Storage_Commander">Storage Commander</option>
+                  {pmsOptions[pmsGroup].map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
                 </select>
               </div>
               {selectedMappingType !== "CUSTOM" && selectedMappingType && (
