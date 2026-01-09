@@ -381,7 +381,8 @@ def clean_number(val):
     s = str(val).strip()
     s = re.sub(r"[^0-9.]", "", s)
     try:
-        return int(s) if s else None
+        num = float(s)
+        return int(num) if num.is_integer() else num
     except ValueError:
         return None
 
@@ -1229,7 +1230,7 @@ def normalize_dataframe(
             invalid_idx = []
             for idx, v in df[col].items():
                 if pd.isna(v) or str(v).strip() == "":
-                    col_values.append(None)
+                    col_values.append(0)
                     continue
                 cleaned = clean_currency(v)
                 if cleaned is not None:
@@ -1376,6 +1377,20 @@ def normalize_dataframe(
                         add_invalid_reason(idx, col, v, "Invalid ZIP (expected 5 digits)")
             if invalid_idx:
                 invalid_cells[col] = invalid_idx
+            df[col] = col_values
+
+        elif col == "Floor":
+            # Normalize common floor strings (e.g., "1st", "first floor") to 1.
+            col_values = []
+            for _, v in df[col].items():
+                if _is_missing(v):
+                    col_values.append(None)
+                    continue
+                raw = str(v).strip().lower()
+                if raw in {"1st", "first", "first floor"}:
+                    col_values.append(1)
+                else:
+                    col_values.append(v)
             df[col] = col_values
 
     if "Space" in df.columns:
@@ -1967,18 +1982,21 @@ def normalize_dataframe(
                     set_value_with_prev("Paid Through Date", idx, ptd.strftime("%m/%d/%y"))
                     highlight_cells.setdefault("yellow", {}).setdefault("Paid Through Date", []).append(idx)
 
-                    rent_val = df.at[idx, "Rent"] if "Rent" in df.columns else None
-                    months_excess = (
+                rent_val = df.at[idx, "Rent"] if "Rent" in df.columns else None
+                if original_ptd.date() > mig_date_value:
+                    months_between = (
                         (original_ptd.year - mig_date_obj.year) * 12
                         + (original_ptd.month - mig_date_obj.month)
                     )
-                    if months_excess > 0 and prepaid_col:
+                    if original_ptd.day < mig_date_obj.day:
+                        months_between -= 1
+                    if months_between > 0 and prepaid_col:
                         try:
                             rent_val_num = float(rent_val)
                         except Exception:
                             rent_val_num = None
                         if rent_val_num is not None:
-                            excess_amount = round(rent_val_num * months_excess, 2)
+                            excess_amount = round(rent_val_num * months_between, 2)
                             existing_prepaid = df.at[idx, prepaid_col]
                             try:
                                 existing_val = float(existing_prepaid) if not _is_missing(existing_prepaid) else 0.0
@@ -1993,12 +2011,12 @@ def normalize_dataframe(
                                 rent_val,
                                 "Prepaid not updated (Rent missing or invalid)",
                             )
-                    elif months_excess > 0 and not prepaid_col:
+                    elif months_between > 0 and not prepaid_col:
                         add_invalid_reason(
                             idx,
                             "Paid Through Date",
                             v,
-                            "Prepaid column not available for excess PTD",
+                            "Prepaid column not available for PTD after migration date",
                         )
                 bill_day_val = df.at[idx, "Bill Day"]
                 rent_balance = df.at[idx, "Rent Balance"] if "Rent Balance" in df.columns else None
@@ -2071,14 +2089,12 @@ def normalize_dataframe(
         rent_balance_updated = []
         for idx, v in df["Rent Balance"].items():
             if _is_missing(v):
-                set_value_with_prev("Rent Balance", idx, None)
                 continue
             try:
                 val = float(v)
             except Exception:
                 continue
-            if val <= 0:
-                set_value_with_prev("Rent Balance", idx, None)
+            if val < 0:
                 rent_balance_updated.append(idx)
         if rent_balance_updated:
             highlight_cells.setdefault("yellow", {}).setdefault("Rent Balance", []).extend(rent_balance_updated)
